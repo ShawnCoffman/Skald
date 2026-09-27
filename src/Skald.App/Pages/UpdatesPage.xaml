@@ -1,0 +1,11 @@
+<Page x:Class="Skald.App.Pages.UpdatesPage" xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" Background="#0B151D" Loaded="Page_Loaded">
+ <ScrollViewer><StackPanel Padding="28,22,28,28" Spacing="14">
+  <TextBlock Text="Windows updates &amp; changes" FontSize="27" FontWeight="SemiBold"/>
+  <TextBlock Text="The latest 50 Windows Update Agent history entries, including failed installs and uninstallations." Foreground="#98AEB9" TextWrapping="Wrap"/>
+  <StackPanel Orientation="Horizontal" Spacing="10"><Button x:Name="RefreshButton" Content="Refresh" Click="Refresh_Click"/><CheckBox x:Name="FailuresOnly" Content="Failures only" Checked="Filter_Changed" Unchecked="Filter_Changed"/></StackPanel>
+  <TextBlock x:Name="StatusText" Text="Loading update history…" Foreground="#9ED8CA" TextWrapping="Wrap"/>
+  <Border Background="#14222B" CornerRadius="10" Padding="16"><StackPanel Spacing="8"><TextBlock Text="Update state" FontSize="17" FontWeight="SemiBold"/><TextBlock x:Name="StateText" Text="Checking…" TextWrapping="Wrap" IsTextSelectionEnabled="True"/></StackPanel></Border>
+  <ListView x:Name="UpdatesList" MaxHeight="700" HorizontalContentAlignment="Stretch"><ListView.ItemTemplate><DataTemplate><StackPanel Padding="4,8" Spacing="4"><TextBlock Text="{Binding Title}" TextWrapping="Wrap" FontWeight="SemiBold"/><TextBlock Text="{Binding Detail}" Foreground="#98AEB9" FontSize="12" TextWrapping="Wrap"/></StackPanel></DataTemplate></ListView.ItemTemplate></ListView>
+  <TextBlock x:Name="SourcesText" Foreground="#D9B27C" TextWrapping="Wrap"/>
+ </StackPanel></ScrollViewer>
+</Page>

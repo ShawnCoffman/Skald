@@ -1,0 +1,3 @@
+<Page x:Class="Skald.App.Pages.PowerPage" xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" xmlns:local="using:Skald.App.Controls" Background="#0B151D">
+ <ScrollViewer><StackPanel Padding="24,18,24,24" Spacing="14"><TextBlock Text="Power, clocks &amp; thermals" FontSize="26" FontWeight="SemiBold" /><Button Content="Start 30-minute power recording" HorizontalAlignment="Left" Click="Record30_Click"/><TextBlock x:Name="RecordingText" Foreground="#B7C9D0" TextWrapping="Wrap" Visibility="Collapsed"/><local:PowerDashboard x:Name="Dashboard" /></StackPanel></ScrollViewer>
+</Page>

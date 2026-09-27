@@ -1,0 +1,13 @@
+<Page x:Class="Skald.App.Pages.NetworkPage" xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" xmlns:local="using:Skald.App.Controls" Background="#0B151D">
+ <ScrollViewer><StackPanel Padding="28,18,28,28" Spacing="14">
+  <TextBlock Text="Network" FontSize="26" FontWeight="SemiBold"/>
+  <TextBlock Text="Traffic and adapter errors are local readings; they do not measure end-to-end latency or packet loss." Foreground="#A5A7B0" TextWrapping="Wrap"/>
+  <TextBlock x:Name="SummaryText" Text="Collecting…" FontSize="20" TextWrapping="Wrap"/>
+  <TextBlock Text="Adapter history · receive · last 3 minutes" FontSize="18"/>
+  <ComboBox x:Name="AdapterPicker" DisplayMemberPath="Name" SelectionChanged="Adapter_Changed" MinWidth="260"/>
+  <local:HistoryChart x:Name="ReceiveChart" MetricName="Adapter receive" Unit="B/s" Height="180"/>
+  <TextBlock x:Name="ScaleText" Foreground="#A5A7B0"/>
+  <TextBlock Text="Active adapters" FontSize="18"/>
+  <ItemsControl x:Name="AdapterList"><ItemsControl.ItemTemplate><DataTemplate><Border Background="#14222B" CornerRadius="8" Padding="15" Margin="0,0,0,8"><StackPanel Spacing="4"><TextBlock Text="{Binding Name}" FontSize="17" FontWeight="SemiBold"/><TextBlock Text="{Binding Link}" Foreground="#AABFC8" TextWrapping="Wrap"/><TextBlock Text="{Binding Traffic}" TextWrapping="Wrap"/><TextBlock Text="{Binding Errors}" Foreground="#D9B27C" TextWrapping="Wrap"/></StackPanel></Border></DataTemplate></ItemsControl.ItemTemplate></ItemsControl>
+ </StackPanel></ScrollViewer>
+</Page>

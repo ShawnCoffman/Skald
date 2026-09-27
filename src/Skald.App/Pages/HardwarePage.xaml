@@ -1,0 +1,68 @@
+<Page
+    x:Class="Skald.App.Pages.HardwarePage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    Loaded="Page_Loaded"
+    Background="#0B151D">
+    <Grid Padding="24,12,24,24" RowSpacing="14">
+        <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="*" /></Grid.RowDefinitions>
+        <Grid.ColumnDefinitions><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+        <Grid Grid.Row="0" ColumnSpacing="12">
+            <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+            <StackPanel Spacing="4">
+                <TextBlock Text="Hardware identity &amp; health" FontSize="27" FontWeight="SemiBold" Foreground="#E8F4F4" />
+                <TextBlock Text="Device facts, reported faults, and evidence. Unmapped readings stay separate." Foreground="#9FB8C1" TextWrapping="Wrap" />
+            </StackPanel>
+            <Button x:Name="RefreshButton" Grid.Column="1" Content="Refresh hardware" Click="Refresh_Click" VerticalAlignment="Top" />
+        </Grid>
+        <TextBlock x:Name="StatusText" Grid.Row="1" Text="Select Refresh to inspect this computer." Foreground="#9FB8C1" TextWrapping="Wrap" />
+        <Grid Grid.Row="2" ColumnSpacing="16">
+            <Grid.ColumnDefinitions><ColumnDefinition Width="320" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+            <Grid Grid.Column="0" RowSpacing="10">
+                <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="*" /></Grid.RowDefinitions>
+                <ComboBox x:Name="CategoryPicker" SelectedIndex="0" SelectionChanged="Category_Changed" HorizontalAlignment="Stretch">
+                    <ComboBoxItem Content="All devices" /><ComboBoxItem Content="Storage" /><ComboBoxItem Content="Graphics" />
+                    <ComboBoxItem Content="Processor" /><ComboBoxItem Content="Memory" /><ComboBoxItem Content="Network" />
+                    <ComboBoxItem Content="Battery" /><ComboBoxItem Content="Platform" />
+                </ComboBox>
+                <ListView x:Name="DeviceList" Grid.Row="1" SelectionChanged="Device_Selected" SelectionMode="Single">
+                    <ListView.ItemTemplate><DataTemplate><StackPanel Padding="2,7" Spacing="4">
+                        <TextBlock Text="{Binding Name}" TextWrapping="Wrap" FontWeight="SemiBold" />
+                        <TextBlock Text="{Binding HealthLabel}" Foreground="#8DB1B7" FontSize="12" />
+                    </StackPanel></DataTemplate></ListView.ItemTemplate>
+                </ListView>
+            </Grid>
+            <ScrollViewer Grid.Column="1"><StackPanel Spacing="14">
+                <Border Background="#132630" CornerRadius="8" Padding="18"><StackPanel Spacing="7">
+                    <TextBlock x:Name="DeviceHeading" Text="Select a device" FontSize="23" FontWeight="SemiBold" TextWrapping="Wrap" />
+                    <TextBlock x:Name="HealthText" Text="Health evidence appears here." FontSize="16" Foreground="#8DCFC5" TextWrapping="Wrap" />
+                    <TextBlock x:Name="IdentityText" Foreground="#AAC6C8" TextWrapping="Wrap" />
+                </StackPanel></Border>
+                <Border Background="#17252D" CornerRadius="8" Padding="18"><StackPanel Spacing="7">
+                    <TextBlock Text="Identity &amp; configuration" FontSize="18" FontWeight="SemiBold" />
+                    <TextBlock x:Name="FactsText" TextWrapping="Wrap" Foreground="#D5E1E1" />
+                </StackPanel></Border>
+                <Border Background="#17252D" CornerRadius="8" Padding="18"><StackPanel Spacing="7">
+                    <TextBlock Text="Health evidence" FontSize="18" FontWeight="SemiBold" />
+                    <TextBlock x:Name="EvidenceText" TextWrapping="Wrap" Foreground="#D5E1E1" />
+                </StackPanel></Border>
+                <Border Background="#17252D" CornerRadius="8" Padding="18"><StackPanel Spacing="7">
+                    <TextBlock Text="Incident timeline" FontSize="18" FontWeight="SemiBold" />
+                    <TextBlock x:Name="TimelineText" TextWrapping="Wrap" Foreground="#D5E1E1" />
+                </StackPanel></Border>
+                <Border Background="#17252D" CornerRadius="8" Padding="18"><StackPanel Spacing="7">
+                    <TextBlock Text="Live reading" FontSize="18" FontWeight="SemiBold" />
+                    <TextBlock x:Name="LiveText" TextWrapping="Wrap" Foreground="#D5E1E1" />
+                </StackPanel></Border>
+                <Border Background="#17252D" CornerRadius="8" Padding="18"><StackPanel Spacing="7">
+                    <TextBlock Text="Unmapped hardware reports &amp; sensors" FontSize="18" FontWeight="SemiBold" />
+                    <TextBlock x:Name="UnmappedText" TextWrapping="Wrap" Foreground="#C3D4D6" />
+                </StackPanel></Border>
+                <Border Background="#17252D" CornerRadius="8" Padding="18"><StackPanel Spacing="7">
+                    <TextBlock Text="Source coverage" FontSize="18" FontWeight="SemiBold" />
+                    <TextBlock x:Name="CoverageText" TextWrapping="Wrap" Foreground="#AFC4C7" />
+                </StackPanel></Border>
+            </StackPanel></ScrollViewer>
+        </Grid>
+    </Grid>
+</Page>

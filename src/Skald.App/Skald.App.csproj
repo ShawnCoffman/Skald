@@ -1,0 +1,28 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
+    <TargetPlatformMinVersion>10.0.19041.0</TargetPlatformMinVersion>
+    <RootNamespace>Skald.App</RootNamespace>
+    <AssemblyName>Skald</AssemblyName>
+    <Product>Skald</Product>
+    <ApplicationIcon>Assets\Skald.ico</ApplicationIcon>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <Platforms>x64</Platforms>
+    <RuntimeIdentifiers>win-x64</RuntimeIdentifiers>
+    <UseWinUI>true</UseWinUI>
+    <WindowsPackageType>None</WindowsPackageType>
+    <WindowsAppSDKSelfContained>true</WindowsAppSDKSelfContained>
+    <EnableDefaultApplicationDefinition>true</EnableDefaultApplicationDefinition>
+    <EnableDefaultPageItems>true</EnableDefaultPageItems>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Content Include="Assets\Skald.ico" CopyToOutputDirectory="PreserveNewest" />
+    <ProjectReference Include="..\Skald.Core\Skald.Core.csproj" />
+    <ProjectReference Include="..\Skald.Collectors\Skald.Collectors.csproj" />
+    <ProjectReference Include="..\Skald.Diagnostics\Skald.Diagnostics.csproj" />
+    <ProjectReference Include="..\Skald.Recorder\Skald.Recorder.csproj" />
+    <PackageReference Include="Microsoft.WindowsAppSDK" Version="1.8.260804001" />
+  </ItemGroup>
+</Project>

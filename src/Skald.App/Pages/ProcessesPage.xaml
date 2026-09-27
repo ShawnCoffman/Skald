@@ -1,0 +1,30 @@
+<Page x:Class="Skald.App.Pages.ProcessesPage" xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" Loaded="Page_Loaded">
+ <Grid Padding="24,18,24,20" RowSpacing="12">
+ <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+ <TextBlock Text="Processes" FontSize="26" FontWeight="SemiBold"/>
+ <StackPanel Grid.Row="1" Spacing="8">
+ <Grid ColumnSpacing="12"><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><TextBox x:Name="FilterBox" PlaceholderText="Filter by name, user, or PID" TextChanged="FilterBox_TextChanged"/><ComboBox Grid.Column="1" x:Name="PresetPicker" SelectedIndex="0" SelectionChanged="PresetPicker_SelectionChanged" MinWidth="140"><ComboBoxItem Content="General"/><ComboBoxItem Content="CPU"/><ComboBoxItem Content="Memory"/><ComboBoxItem Content="GPU"/><ComboBoxItem Content="I/O"/></ComboBox></Grid>
+ <Grid><TextBlock x:Name="CountText" Foreground="#AABFC8"/><TextBlock x:Name="SortDescriptionText" HorizontalAlignment="Right" Foreground="#AABFC8"/></Grid>
+ </StackPanel>
+ <Grid Grid.Row="2" Background="#1A303A" Padding="10,6">
+ <Grid.ColumnDefinitions><ColumnDefinition Width="220"/><ColumnDefinition Width="70"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+ <Button Content="Name" Tag="Name" Click="SortHeader_Click" Background="Transparent" BorderThickness="0" Padding="0"/>
+ <Button Grid.Column="1" Content="PID" Tag="PID" Click="SortHeader_Click" Background="Transparent" BorderThickness="0" Padding="0"/>
+ <ScrollViewer x:Name="HeaderScroll" Grid.Column="2" HorizontalScrollBarVisibility="Auto" HorizontalScrollMode="Enabled" VerticalScrollBarVisibility="Disabled" VerticalScrollMode="Disabled" ViewChanged="Metrics_ViewChanged"><StackPanel x:Name="MetricHeaders" Orientation="Horizontal"/></ScrollViewer>
+ </Grid>
+ <ListView x:Name="ProcessList" Grid.Row="3" SelectionChanged="ProcessList_SelectionChanged" Background="#13242E" BorderThickness="0" ScrollViewer.HorizontalScrollMode="Disabled" ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+ <ListView.ItemContainerStyle><Style TargetType="ListViewItem"><Setter Property="MinHeight" Value="36"/><Setter Property="Padding" Value="0"/><Setter Property="HorizontalContentAlignment" Value="Stretch"/></Style></ListView.ItemContainerStyle>
+ <ListView.ItemTemplate><DataTemplate><Border Background="{Binding RowBackground}" BorderBrush="#203640" BorderThickness="0,0,0,1" Padding="10,7"><Grid>
+ <Grid.ColumnDefinitions><ColumnDefinition Width="220"/><ColumnDefinition Width="70"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+ <Button Content="{Binding GroupLabel}" Tag="{Binding GroupKey}" Visibility="{Binding GroupVisibility}" Click="GroupToggle_Click" Background="Transparent" BorderThickness="0" Padding="0" HorizontalAlignment="Left" MaxWidth="214"/>
+ <TextBlock Text="{Binding Name}" Visibility="{Binding TextVisibility}" Margin="{Binding NameMargin}" TextTrimming="CharacterEllipsis" VerticalAlignment="Center"/>
+ <TextBlock Grid.Column="1" Text="{Binding ProcessIdText}" Foreground="#BED0D8" VerticalAlignment="Center"/>
+ <ScrollViewer Grid.Column="2" Tag="metrics" HorizontalScrollMode="Enabled" HorizontalScrollBarVisibility="Hidden" VerticalScrollBarVisibility="Disabled" VerticalScrollMode="Disabled" ViewChanged="Metrics_ViewChanged" Loaded="Metrics_Loaded">
+ <ItemsControl ItemsSource="{Binding Cells}"><ItemsControl.ItemsPanel><ItemsPanelTemplate><StackPanel Orientation="Horizontal"/></ItemsPanelTemplate></ItemsControl.ItemsPanel><ItemsControl.ItemTemplate><DataTemplate><TextBlock Text="{Binding Value}" Width="120" Padding="0,0,12,0" TextTrimming="CharacterEllipsis" Foreground="#BED0D8" VerticalAlignment="Center"/></DataTemplate></ItemsControl.ItemTemplate></ItemsControl>
+ </ScrollViewer>
+ </Grid></Border></DataTemplate></ListView.ItemTemplate>
+ </ListView>
+ <StackPanel Grid.Row="4" Spacing="3"><TextBlock x:Name="SelectedDetailsText" Text="Select a process to see its path and start time." TextTrimming="CharacterEllipsis" Foreground="#BED0D8"/><TextBlock Text="Name and PID stay pinned. GPU is the busiest engine. I/O includes non-disk activity. Faults are cumulative. — means unavailable." FontSize="11" Foreground="#AABFC8" TextWrapping="Wrap"/></StackPanel>
+ </Grid>
+</Page>
+

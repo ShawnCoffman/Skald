@@ -1,0 +1,1774 @@
+# Build Plan — Open-Source Windows Performance Forensics Tool
+
+## Project Goal
+
+Build a lightweight, open-source Windows application that answers a question Task Manager usually does not:
+
+> **Why is this computer slow, hot, using too much power, draining its battery, or behaving differently than normal?**
+
+The application should combine live system monitoring, process correlation, historical recording, automated bottleneck detection, and replayable diagnostic sessions.
+
+This is not intended to be another generic Task Manager clone.
+
+The focus is:
+
+> **Observe → correlate → explain → record → replay**
+
+The application should be useful for both technical users and enterprise support teams troubleshooting vague tickets such as:
+
+- "My computer is slow."
+- "My laptop battery only lasts six hours now."
+- "The fan runs constantly."
+- "Everything freezes randomly."
+- "The disk is at 100%."
+- "Task Manager says CPU isn't maxed out, but the machine still feels slow."
+- "It was fine yesterday."
+
+---
+
+# 1. Core Diagnostic Philosophy
+
+Organize system performance around simple questions rather than hundreds of raw counters.
+
+### CPU — Who is computing?
+
+Determine:
+
+- Which processes are consuming CPU.
+- Per-process CPU utilization.
+- Per-core / logical processor utilization.
+- Whether one core is saturated.
+- CPU frequency.
+- Effective clock where available.
+- Kernel vs user CPU time.
+- CPU temperature where available.
+- CPU package power where available.
+- Thermal throttling.
+- Power limiting.
+- CPU saturation duration.
+
+The tool should distinguish situations such as:
+
+> CPU is highly utilized and operating normally.
+
+from:
+
+> CPU is highly utilized but being power-limited.
+
+from:
+
+> Total CPU utilization is only 18%, but one logical processor has been saturated for four minutes.
+
+---
+
+# 2. Memory — Where is the pressure?
+
+Collect:
+
+- Physical RAM installed.
+- Physical RAM used.
+- Available memory.
+- Cached memory.
+- Standby memory.
+- Modified memory.
+- Memory compression.
+- Commit charge.
+- Commit limit.
+- Commit percentage.
+- Pagefile usage.
+- Page reads/writes.
+- Hard faults/sec.
+- Per-process working set.
+- Per-process private bytes.
+- Per-process commit.
+
+Do not treat "90% RAM used" alone as a problem.
+
+The diagnostic engine should differentiate:
+
+### Healthy high utilization
+
+> 88% of RAM is occupied, but significant standby/cache memory is reclaimable and paging is minimal.
+
+### Actual memory pressure
+
+> Physical memory availability is low, commit utilization is high, and sustained hard paging is occurring.
+
+### Process growth
+
+> msedge.exe increased from 2.1 GB to 8.4 GB during the session and is the largest contributor to memory pressure.
+
+---
+
+# 3. Disk Activity — Where are we waiting?
+
+Monitor each physical disk and logical volume.
+
+Collect:
+
+- Read throughput.
+- Write throughput.
+- IOPS.
+- Active time.
+- Average read latency.
+- Average write latency.
+- Queue depth.
+- Outstanding I/O.
+- Disk health where available.
+- Process-level disk I/O.
+- File-level activity when practical.
+- Storage type.
+- Bus/interface.
+- Model.
+- Firmware.
+- Capacity.
+
+Diagnose the difference between:
+
+### Bandwidth saturation
+
+> Disk is processing 5.8 GB/s with low latency.
+
+and:
+
+### Latency saturation
+
+> Disk is at 100% active time while processing only 22 MB/s, with 140 ms average latency and a queue depth of 12.
+
+The second condition should be highlighted as a likely performance issue.
+
+---
+
+# 4. Disk Space — Where did the bits go?
+
+Provide a storage-capacity analysis separate from disk performance.
+
+Display:
+
+- Total capacity.
+- Free space.
+- Used space.
+- Percentage free.
+- Largest directories.
+- Largest files.
+- User profile usage.
+- Temp/cache usage.
+- Windows Update/cache usage.
+- Application usage.
+- Optional previous scan comparison.
+
+Example:
+
+> C: has 17.4 GB free of 476 GB.
+
+Then:
+
+> Largest consumers:
+>
+> Users — 184 GB  
+> Program Files — 91 GB  
+> Windows — 48 GB  
+> ProgramData — 37 GB
+
+Allow drilling down into directories.
+
+Avoid automatically deleting anything.
+
+---
+
+# 5. GPU — Who is rendering/accelerating?
+
+Collect where supported:
+
+- GPU utilization.
+- GPU engine utilization.
+- Dedicated VRAM used.
+- Shared GPU memory.
+- GPU temperature.
+- GPU power.
+- GPU clock.
+- Video decode utilization.
+- Video encode utilization.
+- Compute utilization.
+- Per-process GPU usage.
+
+Especially important on laptops:
+
+Determine whether a discrete GPU is awake when it should not be.
+
+Example:
+
+> NVIDIA discrete GPU remained active for 84% of this session despite no 3D workload.
+
+That should become a battery/power diagnostic event.
+
+---
+
+# 6. Network — Where are we talking?
+
+Collect:
+
+- Adapter state.
+- Link speed.
+- Send rate.
+- Receive rate.
+- Per-process network usage where feasible.
+- Interface type.
+- Wi-Fi signal quality.
+- Wi-Fi PHY/link rate.
+- Packet loss if measurable without generating excessive traffic.
+- TCP retransmission indicators where available.
+- Active connections.
+- Remote endpoints.
+
+Do not expose sensitive network information unnecessarily in exports.
+
+Provide privacy controls for:
+
+- remote IPs
+- hostnames
+- SSIDs
+- user names
+
+---
+
+# 7. Power — Where is the energy going?
+
+This should be a major feature.
+
+Collect where supported:
+
+- AC/battery state.
+- Battery percentage.
+- Battery design capacity.
+- Full-charge capacity.
+- Battery health percentage.
+- Charge/discharge rate.
+- Battery voltage.
+- Estimated power draw.
+- CPU package power.
+- GPU power.
+- Platform power information.
+- Power plan.
+- Windows power mode.
+- Sleep-state behavior.
+- Modern Standby information where relevant.
+
+Unsupported sensors must be represented as:
+
+> Unavailable
+
+Never infer a numeric value and display it as measured data.
+
+---
+
+# 8. Battery Analysis
+
+Battery health and battery consumption must be treated as different concepts.
+
+Example:
+
+> Battery health: 99%
+
+does not imply:
+
+> Battery runtime is normal.
+
+The application should analyze:
+
+### Battery capacity
+
+- Design capacity.
+- Full-charge capacity.
+- Cycle count if available.
+- Health percentage.
+
+### Battery consumption
+
+- Current discharge rate.
+- Average discharge rate.
+- Peak discharge.
+- Discharge over recording period.
+- Estimated runtime at current workload.
+
+### Correlated activity
+
+Look for correlations between discharge rate and:
+
+- CPU usage.
+- CPU package power.
+- GPU activity.
+- dGPU wake state.
+- Display configuration.
+- Display refresh rate.
+- brightness where accessible.
+- Wi-Fi activity.
+- storage activity.
+- background processes.
+- sync applications.
+- antivirus activity.
+- webcam use.
+- external USB devices.
+
+The software must clearly distinguish measured attribution from correlation.
+
+Do not claim:
+
+> Chrome used exactly 3.8 watts
+
+unless Windows/hardware provides reliable direct attribution.
+
+Instead say:
+
+> Increased battery discharge coincides with sustained Chrome CPU activity and discrete GPU activation.
+
+---
+
+# 9. Thermals — Why can't the machine go faster?
+
+Monitor:
+
+- CPU temperature.
+- GPU temperature.
+- thermal zones.
+- frequency changes.
+- throttling indicators.
+- processor performance limits.
+- platform thermal events.
+
+Detect conditions such as:
+
+### Thermal throttling
+
+> CPU temperature repeatedly reached its thermal limit and effective clock decreased under sustained load.
+
+### Power limiting
+
+> CPU remained below thermal limits but reached its configured sustained power ceiling.
+
+### No hardware limitation
+
+> CPU utilization is high, but no thermal or power limiting was detected.
+
+---
+
+# 10. Live Summary Dashboard
+
+The main UI should resemble a modernized engineering version of Task Manager.
+
+Suggested layout:
+
+```text
++-------------------------------------------------------------+
+| System Summary                              ● Record         |
++-------------------------------------------------------------+
+| CPU      Clock      Temp      GPU      Power                |
+| gauges / compact status indicators                           |
++--------------------------+----------------------------------+
+| CPU Timeline             | Top Processes                    |
+|                          |                                  |
+|                          |                                  |
++--------------------------+----------------------------------+
+| Memory Timeline                                              |
++-------------------------------------------------------------+
+| Network | Disk | GPU | Battery/Power                         |
++-------------------------------------------------------------+
+```
+
+The dashboard should prioritize:
+
+- current bottleneck
+- current pressure
+- major contributors
+- active warnings
+
+rather than visual decoration.
+
+---
+
+# 11. System Pressure Model
+
+Create a standardized pressure state:
+
+- Normal
+- Elevated
+- High
+- Critical
+- Unavailable
+
+Apply it to:
+
+- CPU
+- Memory
+- Disk
+- GPU
+- Network
+- Power
+- Thermals
+
+Example:
+
+```text
+CPU       Elevated
+Memory    High
+Disk      Critical
+GPU       Normal
+Network   Normal
+Power     Normal
+Thermals  Normal
+```
+
+Pressure status must be derived from documented metrics and thresholds.
+
+---
+
+# 12. Explainable Diagnostics
+
+Every diagnosis must be explainable.
+
+Example:
+
+```text
+Memory Pressure: HIGH
+
+Physical RAM used:       94%
+Commit used:             89%
+Available RAM:           1.2 GB
+Hard faults/sec:         1,460
+Page reads:              188 MB/s
+Duration:                134 sec
+
+Triggers:
+✓ Physical memory > 90%
+✓ Available RAM below configured threshold
+✓ Sustained paging detected
+✓ Condition persisted longer than 30 sec
+```
+
+Avoid black-box scores such as:
+
+> PC Health Score: 62
+
+unless the score can be decomposed into explicit, understandable rules.
+
+---
+
+# 13. "Why Is My Computer Slow?" Analyzer
+
+Provide a prominent button:
+
+> **Analyze Performance**
+
+Default analysis period:
+
+30–60 seconds.
+
+During the analysis:
+
+- collect high-value metrics
+- identify bottlenecks
+- correlate processes
+- correlate subsystem behavior
+- detect power/thermal limits
+- generate a concise explanation
+
+Example output:
+
+```text
+Primary Constraint
+------------------
+Memory pressure
+
+Physical memory remained above 94% for 47 seconds.
+
+Sustained paging occurred during this period.
+
+Disk latency increased from:
+2.1 ms → 87 ms
+
+Largest memory contributors:
+
+Chrome       8.7 GB
+Teams        3.2 GB
+Outlook      2.0 GB
+
+CPU:
+Normal
+
+GPU:
+Normal
+
+Thermal throttling:
+Not detected
+
+Storage hardware:
+No health warning detected
+```
+
+---
+
+# 14. Flight Recorder
+
+This should be one of the flagship features.
+
+Provide a permanent:
+
+> ● RECORD
+
+button.
+
+Recording presets:
+
+- 5 minutes
+- 15 minutes
+- 30 minutes
+- 1 hour
+- Custom
+- Until stopped
+
+While recording:
+
+```text
+● REC    18:42 / 30:00
+```
+
+Allow recordings to continue while the UI is minimized.
+
+---
+
+# 15. Sampling Modes
+
+Provide at least two modes.
+
+## Standard Recording
+
+Designed for normal support use.
+
+Suggested interval:
+
+2 seconds.
+
+Capture:
+
+- major system counters
+- process snapshots
+- disk
+- memory
+- CPU
+- GPU
+- network
+- power
+- battery
+- thermal information
+
+CPU overhead should ideally remain below approximately 1–2% on normal modern systems.
+
+## Deep Recording
+
+For difficult performance investigations.
+
+Potentially enable:
+
+- additional ETW providers
+- shorter sample intervals
+- thread activity
+- detailed disk I/O
+- context switches
+- selected scheduler information
+
+Warn users that Deep mode generates larger recordings and may have additional overhead.
+
+---
+
+# 16. Rolling Buffer
+
+Maintain an optional rolling history even when a formal session has not been started.
+
+Suggested default:
+
+5 minutes.
+
+Potential configuration:
+
+- Off
+- 5 minutes
+- 10 minutes
+- 15 minutes
+
+This allows the user to say:
+
+> "It froze a minute ago."
+
+Then the technician can examine what occurred before the user reported it.
+
+Keep the rolling buffer memory-efficient.
+
+---
+
+# 17. User Problem Marker
+
+During a recording provide a large button:
+
+> ⚑ **MARK PROBLEM**
+
+When clicked:
+
+- record timestamp
+- create session event
+- optionally ask for a short note
+- preserve detailed telemetry around that timestamp
+
+Example:
+
+```text
+14:37:18
+USER REPORTED PROBLEM
+
+"Teams froze while sharing screen"
+```
+
+The analysis view should automatically focus on approximately:
+
+- 2 minutes before
+- marker
+- 2 minutes after
+
+---
+
+# 18. Automatic Event Detection
+
+Generate timeline markers automatically.
+
+Initial event types:
+
+```text
+CPU saturation
+Single-core saturation
+Memory pressure
+Commit pressure
+Paging spike
+Disk latency spike
+Disk queue spike
+GPU saturation
+GPU VRAM pressure
+Discrete GPU activated
+CPU thermal throttling
+GPU thermal throttling
+CPU power limiting
+Battery discharge spike
+Network disconnect
+Wi-Fi signal degradation
+Process launch
+Process exit
+Power source changed
+Sleep/resume
+Display configuration changed
+```
+
+Allow clicking any event to move directly to that point in the recording.
+
+---
+
+# 19. Replay Mode
+
+This is critical.
+
+A saved recording should reopen inside the application and behave almost like the live system dashboard.
+
+Provide a timeline:
+
+```text
+|----|----|----|----|----|----|
+14:00                        14:30
+                   ^
+                14:21:37
+```
+
+Dragging the timeline updates:
+
+- CPU
+- memory
+- disk
+- network
+- GPU
+- battery
+- power
+- temperature
+- process list
+
+The user should effectively be able to:
+
+> **Replay the computer.**
+
+---
+
+# 20. Process History
+
+During recordings, processes must not disappear from history when they terminate.
+
+Store:
+
+- PID
+- process name
+- executable path where allowed
+- start time
+- stop time
+- CPU usage
+- memory
+- disk I/O
+- network activity
+- GPU activity
+- parent PID where available
+
+Handle PID reuse correctly by associating processes with:
+
+> PID + creation time
+
+rather than PID alone.
+
+---
+
+# 21. Session Summary
+
+At recording completion automatically generate:
+
+```text
+SESSION SUMMARY
+
+Duration:
+30m 00s
+
+Performance incidents:
+7
+
+Primary issue:
+Memory pressure
+
+Secondary issue:
+Disk latency caused by paging
+
+User markers:
+1
+
+CPU saturation:
+2m 18s
+
+Memory pressure:
+18m 42s
+
+Disk latency > 50ms:
+6m 14s
+
+Thermal throttling:
+None
+
+Power limiting:
+3 events
+
+Peak battery discharge:
+21.8 W
+```
+
+---
+
+# 22. Session Comparison
+
+Future phase.
+
+Allow two sessions from the same machine to be compared.
+
+Example:
+
+```text
+Previous session
+Average battery draw: 7.3 W
+
+Current session
+Average battery draw: 10.1 W
+
+Increase:
+38%
+```
+
+Then compare:
+
+- CPU activity
+- process usage
+- GPU state
+- drivers
+- power mode
+- Windows build
+- recently installed software
+- display configuration
+
+This could become extremely valuable for:
+
+> "It wasn't doing this last month."
+
+---
+
+# 23. Session Storage
+
+Use **SQLite** for session recordings.
+
+Each recording should preferably remain one portable file.
+
+Example extension:
+
+```text
+.perfsession
+```
+
+Internally:
+
+```text
+Metadata
+Machine
+Samples
+CPU
+Memory
+Disk
+GPU
+Network
+Battery
+Power
+Processes
+ProcessSamples
+Events
+Markers
+Configuration
+```
+
+Use indexed timestamps heavily.
+
+Potential future optimization:
+
+- delta encoding
+- compression
+- lower-frequency process snapshots
+- separate high/low resolution streams
+
+---
+
+# 24. Export
+
+Support:
+
+### Native session
+
+```text
+ComputerName_20260925_143000.perfsession
+```
+
+Allows complete replay.
+
+### JSON
+
+Useful for:
+
+- automation
+- Power BI
+- scripting
+- enterprise ingestion
+
+### CSV
+
+Optional for individual data sets.
+
+### HTML Report
+
+Portable human-readable summary containing:
+
+- system information
+- findings
+- graphs
+- events
+- top processes
+- battery information
+- power information
+
+### Support bundle
+
+Example:
+
+```text
+PERF-LT12345-20260925-1430.zip
+```
+
+Potential contents:
+
+```text
+session.perfsession
+summary.html
+summary.json
+systeminfo.json
+events.json
+diagnostics.txt
+```
+
+---
+
+# 25. Application Architecture
+
+Recommended:
+
+### Language
+
+**C#**
+
+### Runtime
+
+**.NET 10**
+
+### UI
+
+Prefer:
+
+**WinUI 3**
+
+Alternatives may be considered if development friction becomes significant.
+
+### Native access
+
+Use P/Invoke/native interop only where necessary.
+
+Avoid building the entire application in C++ unless a clear technical requirement emerges.
+
+---
+
+# 26. Proposed Solution Structure
+
+```text
+Skald.sln
+
+src/
+│
+├── Skald.App
+│   └── WinUI application
+│
+├── Skald.Core
+│   ├── models
+│   ├── interfaces
+│   └── shared types
+│
+├── Skald.Collectors
+│   ├── Cpu
+│   ├── Memory
+│   ├── Disk
+│   ├── Network
+│   ├── Gpu
+│   ├── Battery
+│   ├── Power
+│   └── Thermal
+│
+├── Skald.Processes
+│
+├── Skald.Diagnostics
+│
+├── Skald.Recorder
+│
+├── Skald.Storage
+│   └── SQLite
+│
+├── Skald.Export
+│
+└── Skald.Interop
+    └── native Windows APIs
+
+tests/
+│
+├── Skald.Core.Tests
+├── Skald.Diagnostics.Tests
+├── Skald.Recorder.Tests
+└── Skald.Collectors.Tests
+```
+
+---
+
+# 27. Collector Interface
+
+Collectors should be modular.
+
+Conceptually:
+
+```csharp
+public interface IMetricCollector
+{
+    string Name { get; }
+
+    bool IsSupported { get; }
+
+    Task InitializeAsync();
+
+    Task<MetricSample> SampleAsync(
+        CancellationToken cancellationToken);
+
+    Task ShutdownAsync();
+}
+```
+
+Each collector should report capability status.
+
+Example:
+
+```text
+CPU utilization       Supported
+CPU frequency         Supported
+CPU temperature       Unsupported
+CPU package power     Supported
+CPU limit reasons     Supported
+```
+
+This keeps unsupported hardware from breaking the application.
+
+---
+
+# 28. Capability Detection
+
+Perform hardware capability detection on startup.
+
+Never assume:
+
+- Intel CPU
+- AMD CPU
+- discrete GPU
+- battery
+- SMART support
+- temperature sensor support
+- package-power support
+
+Example:
+
+```text
+CAPABILITIES
+
+Battery                     Yes
+CPU Temperature             Yes
+CPU Package Power           No
+GPU Temperature             Yes
+GPU Power                   Yes
+NVMe Health                 Yes
+Wi-Fi Metrics               Yes
+Processor Limit Reasons     Partial
+```
+
+The UI should automatically hide or gray unavailable telemetry.
+
+---
+
+# 29. Potential Windows Data Sources
+
+Use native Windows-supported sources where practical.
+
+Investigate:
+
+- PDH
+- Performance Counters
+- ETW
+- WMI/CIM
+- Windows Performance APIs
+- Process APIs
+- Thread APIs
+- IP Helper API
+- SetupAPI
+- DXGI
+- D3DKMT
+- Power APIs
+- battery APIs
+- storage APIs
+- Event Log APIs
+- Windows Energy Estimation mechanisms where usable
+
+Avoid parsing command-line tools when a stable native API exists.
+
+Commands such as `powercfg` may still be useful for specific diagnostic reports but should not become the primary telemetry architecture.
+
+---
+
+# 30. Permissions
+
+Normal monitoring should run without administrator rights whenever possible.
+
+Only request elevation for functionality that genuinely requires it.
+
+Do not launch the entire application elevated by default.
+
+Display capability limitations rather than failing.
+
+Example:
+
+> Detailed storage health requires administrator privileges.
+
+Then allow:
+
+> **Enable Elevated Diagnostics**
+
+if needed.
+
+---
+
+# 31. Safety
+
+Version 1 should be primarily read-only.
+
+Do not include:
+
+- process termination
+- driver changes
+- registry changes
+- service modifications
+- power-plan changes
+- disk cleanup
+- application removal
+
+until the monitoring and diagnostic platform is stable.
+
+The application explains problems before attempting to fix them.
+
+---
+
+# 32. Diagnostic Rules Engine
+
+Keep diagnostic rules separate from collectors.
+
+Example:
+
+```text
+Collectors
+    ↓
+Normalized Metrics
+    ↓
+Diagnostic Rules
+    ↓
+Findings
+    ↓
+UI / Report
+```
+
+Example rule:
+
+```text
+MemoryPressureHigh
+
+IF
+PhysicalMemoryPercent > 90
+
+AND
+
+HardFaultsPerSecond > threshold
+
+AND
+
+condition persists > 30 seconds
+
+THEN
+Memory Pressure = High
+```
+
+Store:
+
+- trigger conditions
+- supporting metrics
+- start time
+- end time
+- severity
+- contributing processes
+
+---
+
+# 33. Transparent Findings
+
+Each finding should contain something like:
+
+```text
+Finding:
+Storage latency pressure
+
+Severity:
+High
+
+Started:
+14:38:04
+
+Ended:
+14:41:22
+
+Evidence:
+Disk active time: 100%
+Average latency: 148ms
+Queue depth: 11.8
+Throughput: 21MB/s
+
+Correlated processes:
+MsMpEng.exe
+Teams.exe
+
+Explanation:
+The drive is experiencing high latency despite relatively low
+throughput, indicating a latency/queue bottleneck rather than
+sequential bandwidth saturation.
+```
+
+---
+
+# 34. First MVP
+
+Do not try to implement everything immediately.
+
+## MVP 1 — Live telemetry
+
+Implement:
+
+- system information
+- CPU
+- memory
+- disk
+- processes
+- basic network
+
+Build a functional Summary screen.
+
+No recording yet.
+
+Success criteria:
+
+- low overhead
+- stable sampling
+- accurate data
+- process correlation works
+
+---
+
+# 35. MVP 2 — Recorder
+
+Add:
+
+- timed sessions
+- SQLite storage
+- start/stop
+- session metadata
+- CPU history
+- memory history
+- disk history
+- process history
+
+Success criteria:
+
+A 30-minute recording can be saved and reopened.
+
+---
+
+# 36. MVP 3 — Replay
+
+Add:
+
+- timeline
+- scrubber
+- event timestamps
+- historical process table
+- synchronized graphs
+
+Success criteria:
+
+Moving the timeline changes the entire dashboard to the historical state at that timestamp.
+
+---
+
+# 37. MVP 4 — Diagnostic Engine
+
+Implement initial detections:
+
+1. CPU saturation
+2. single-core saturation
+3. memory pressure
+4. paging pressure
+5. disk latency
+6. disk queue saturation
+
+Do not add dozens of rules yet.
+
+Validate these thoroughly.
+
+---
+
+# 38. MVP 5 — Laptop Support
+
+Add:
+
+- battery health
+- discharge rate
+- battery runtime projection
+- AC/DC state
+- power mode
+- CPU package power where supported
+- GPU activity
+- dGPU wake detection
+- thermal telemetry
+- CPU performance limiting
+
+Add:
+
+> Battery / Power
+
+dashboard.
+
+---
+
+# 39. MVP 6 — Problem Marker
+
+Implement:
+
+> ⚑ MARK PROBLEM
+
+Then automatically analyze telemetry around the marker.
+
+Success criteria:
+
+A user can reproduce an issue, press Mark Problem, send the recording to another engineer, and that engineer can immediately examine the relevant timeframe.
+
+---
+
+# 40. MVP 7 — Reports / Export
+
+Add:
+
+- JSON
+- HTML
+- portable session bundle
+
+Potential later:
+
+- Power BI-compatible schema
+- enterprise telemetry upload
+
+---
+
+# 41. UI Pages
+
+Initial navigation:
+
+```text
+Summary
+
+Performance
+  CPU
+  Memory
+  Disk
+  GPU
+  Network
+
+Processes
+
+Power & Battery
+
+Storage Space
+
+Flight Recorder
+
+Sessions
+
+System Info
+
+Settings
+```
+
+Do not overload the navigation.
+
+---
+
+# 42. Summary Screen
+
+Summary should answer:
+
+> Is anything wrong right now?
+
+Show:
+
+```text
+SYSTEM STATUS
+
+CPU          Normal
+Memory       HIGH
+Disk         Elevated
+GPU          Normal
+Network      Normal
+Battery      Normal
+Thermals     Normal
+```
+
+Then:
+
+```text
+PRIMARY FINDING
+
+Memory pressure is causing sustained paging.
+
+Chrome and Teams currently account for
+approximately 47% of committed application memory.
+```
+
+Graphs remain available for engineers, but the explanation receives equal visual importance.
+
+---
+
+# 43. Performance Page
+
+Provide synchronized graphs for:
+
+- CPU
+- clock
+- temperature
+- memory
+- disk
+- GPU
+- network
+- battery discharge
+
+Live and replay modes should use the same visualization components.
+
+---
+
+# 44. Processes Page
+
+Allow sorting by:
+
+- CPU
+- memory
+- commit
+- disk reads
+- disk writes
+- network
+- GPU
+- energy correlation
+
+During replay:
+
+> process values correspond to selected historical timestamp.
+
+---
+
+# 45. Power & Battery Page
+
+Include:
+
+```text
+Battery Health
+99%
+
+Full Charge Capacity
+58.2 Wh
+
+Design Capacity
+58.8 Wh
+
+Current Draw
+13.8 W
+
+Session Average
+11.2 W
+
+Estimated Runtime
+5h 19m
+```
+
+Then:
+
+```text
+POWER CONTRIBUTORS
+
+CPU activity          Elevated
+Discrete GPU          Active
+Display               High refresh rate
+Disk activity         Normal
+Network activity      Normal
+```
+
+Use "contributors" rather than fake exact watt attribution unless exact information is available.
+
+---
+
+# 46. Performance Targets
+
+The monitoring application itself must not become the performance problem.
+
+Initial goals:
+
+### Idle CPU
+
+<1% average if practical.
+
+### Standard recording CPU
+
+<2%.
+
+### Memory
+
+Prefer under 150 MB initially.
+
+### Disk writes
+
+Batch session writes.
+
+Avoid writing every metric synchronously every second.
+
+Use buffered transactions.
+
+---
+
+# 47. Data Retention
+
+Default:
+
+Recordings remain until the user deletes them.
+
+Optional future policy:
+
+```text
+Keep sessions:
+7 days
+30 days
+90 days
+Forever
+```
+
+Rolling telemetry should remain temporary unless explicitly saved.
+
+---
+
+# 48. Privacy
+
+Add export privacy controls.
+
+Options:
+
+```text
+Include username
+Include computer name
+Include process paths
+Include network endpoints
+Include Wi-Fi information
+Include installed software
+```
+
+Enterprise engineers may need all of these.
+
+Public bug-report submissions may not.
+
+---
+
+# 49. Open-Source Model
+
+Suggested repository layout:
+
+```text
+README.md
+LICENSE
+CONTRIBUTING.md
+SECURITY.md
+docs/
+src/
+tests/
+samples/
+```
+
+Consider:
+
+**MIT**
+
+or:
+
+**Apache-2.0**
+
+Apache-2.0 may make sense if patent protections matter.
+
+Do not copy TMOG source, artwork, UI assets, proprietary implementations, or code.
+
+The project can solve similar problems while using its own architecture and implementation.
+
+---
+
+# 50. Documentation
+
+Document every major metric.
+
+Example:
+
+```text
+Hard Faults/sec
+
+What it means:
+Pages that must be retrieved from disk or another mapped source.
+
+What it does NOT necessarily mean:
+That hardware RAM is defective.
+
+Why Skald uses it:
+Sustained hard faults combined with low available memory and
+disk activity can indicate memory pressure affecting responsiveness.
+```
+
+This documentation could become one of the project's strongest features.
+
+---
+
+# 51. Testing Strategy
+
+Use both synthetic and real-world scenarios.
+
+### CPU
+
+- all-core workload
+- single-thread workload
+- burst workload
+
+### Memory
+
+- gradual allocation
+- commit exhaustion
+- paging pressure
+
+### Disk
+
+- sequential reads
+- sequential writes
+- random reads
+- high queue depth
+- intentionally slow external storage
+
+### Network
+
+- sustained transfer
+- poor Wi-Fi
+- disconnected adapter
+
+### Battery
+
+- CPU workload
+- video playback
+- dGPU activation
+- high refresh display
+
+Validate that the diagnostic engine identifies the correct subsystem rather than simply reporting whichever metric is highest.
+
+---
+
+# 52. Example Support Workflow
+
+User reports:
+
+> "My laptop keeps freezing."
+
+Technician says:
+
+> Open Skald.
+
+Then:
+
+```text
+Flight Recorder
+Duration: 30 minutes
+Mode: Standard
+Start
+```
+
+User works normally.
+
+Problem occurs.
+
+User presses:
+
+> ⚑ MARK PROBLEM
+
+Recording completes.
+
+User sends:
+
+```text
+LT3421_20260925_1430.perfsession
+```
+
+Engineer opens it.
+
+Timeline automatically jumps to:
+
+```text
+USER MARKER
+14:47:18
+```
+
+Skald reports:
+
+```text
+PRIMARY EVENT
+
+Memory pressure began 73 seconds before the reported issue.
+
+Available memory:
+4.1 GB → 312 MB
+
+Hard faults:
+18/sec → 2,840/sec
+
+Disk latency:
+1.9ms → 126ms
+
+Largest contributor:
+Teams.exe
+
+Teams memory:
+1.8GB → 7.1GB
+
+CPU:
+Normal
+
+GPU:
+Normal
+
+Thermal throttling:
+None
+```
+
+That is the experience this project should ultimately deliver.
+
+---
+
+# 53. Guiding Rule
+
+Whenever considering adding another counter, ask:
+
+> **What troubleshooting question does this measurement answer?**
+
+If there is no good answer, do not put it on the main interface.
+
+Raw telemetry may still be available under an advanced view, but the main application should remain focused on explaining system behavior.
+
+---
+
+# Final Product Definition
+
+This application is:
+
+> **An open-source Windows performance forensic tool that combines live monitoring, subsystem pressure analysis, process correlation, battery and power diagnostics, and a replayable flight recorder to explain why a Windows computer is performing poorly.**
+
+It is **not** merely a Task Manager replacement.
+
+Its defining feature should be:
+
+> **Don't just show me what the computer is doing. Show me why it's happening — and let me replay it after the problem is gone.**
+## Implementation checkpoint — 2026-09-26 engineering layout
+
+Implemented: grouped subsystem navigation; dedicated CPU and Memory views; compact overview hardware strip; contributor presets; process column presets with frozen identity columns; Power, Clocks & Thermals view; identified sensor records; NVIDIA clock telemetry; optional existing hardware-sensor WMI providers; timestamp-based power history; combined recording/replay navigation and shared chart controls; 60-second historical analysis with 30-second sustained-condition rules.
+
+Still planned: direct CPU hardware-sensor access without an external provider, effective-clock collection, measured thermal/power-limit indicators, commit/paging and storage-latency counters, SQLite session writing, and full replay of every live subsystem view. The current portable recording format remains compressed JSON. Unsupported measurements remain explicitly unavailable.
+
+Overview inventory checkpoint (2026-09-26)
+- Replaced overview assessment/contributors/charts/power strip with four live meters plus Machine context and OS & firmware cards.
+- Added asynchronous, cached system inventory; installed/usable RAM, make/model/CPU/GPU, Windows release/full build, BIOS, Secure Boot, boot time.
+- Added expandable device issues, fixed-volume capacity, searchable installed-app registrations, restart signals, refresh and copy summary.
+- Inventory failures remain unknown/partial; disabled devices are distinct from other faults. No inventory scan in the 2-second telemetry path.
+
+Reliability & Events checkpoint (2026-09-26)
+- Added Performance child page with background cached Windows event/reliability collection.
+- Added range/category/search/day filters, report timeline, recurring grouping, occurrences, message/XML inspection, and source coverage.
+- Added tests for provider-aware classification, exact-record deduplication, and unclean-shutdown interpretation.
+- Future: broader driver-change history, saved-session correlation, and dump analysis. Current counts describe available Windows reports, not unique incidents or a fabricated reliability score.

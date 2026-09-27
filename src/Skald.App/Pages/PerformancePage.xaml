@@ -1,0 +1,31 @@
+<Page
+    x:Class="Skald.App.Pages.PerformancePage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:local="using:Skald.App.Controls"
+    Background="#0B151D">
+    <ScrollViewer VerticalScrollBarVisibility="Auto">
+        <StackPanel Padding="28,22,28,28" Spacing="15">
+            <StackPanel Spacing="3">
+                <TextBlock Text="Performance" FontSize="27" FontWeight="SemiBold" />
+                <TextBlock Text="Four views of the same three-minute window. Gaps mean the collector did not report a value." Foreground="#98AEB9" FontSize="13" TextWrapping="Wrap" />
+            </StackPanel>
+            <Grid ColumnSpacing="13" RowSpacing="13">
+                <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+                <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
+                <Border Grid.Row="0" Grid.Column="0" Background="#14222B" CornerRadius="10" Padding="17,15">
+                    <StackPanel Spacing="7"><Grid><TextBlock Text="CPU UTILIZATION" Foreground="#83BEB0" FontSize="11" FontWeight="SemiBold" /><TextBlock x:Name="CpuText" Text="Unavailable" HorizontalAlignment="Right" FontSize="22" FontWeight="SemiBold" /></Grid><local:HistoryChart x:Name="CpuChart" MetricName="CPU utilization" Unit="%" Height="200" /><TextBlock x:Name="CpuDetail" Foreground="#AABCC3" FontSize="12" /></StackPanel>
+                </Border>
+                <Border Grid.Row="0" Grid.Column="1" Background="#14222B" CornerRadius="10" Padding="17,15">
+                    <StackPanel Spacing="7"><Grid><TextBlock Text="PHYSICAL MEMORY" Foreground="#B6A7E2" FontSize="11" FontWeight="SemiBold" /><TextBlock x:Name="MemoryText" Text="Unavailable" HorizontalAlignment="Right" FontSize="22" FontWeight="SemiBold" /></Grid><local:HistoryChart x:Name="MemoryChart" MetricName="Physical memory used" Unit="%" Height="200" /><TextBlock x:Name="MemoryDetail" Foreground="#AABCC3" FontSize="12" /></StackPanel>
+                </Border>
+                <Border Grid.Row="1" Grid.Column="0" Background="#14222B" CornerRadius="10" Padding="17,15">
+                    <StackPanel Spacing="7"><Grid><TextBlock Text="PHYSICAL DISK ACTIVITY" Foreground="#E3BA7E" FontSize="11" FontWeight="SemiBold" /><TextBlock x:Name="DiskText" Text="Unavailable" HorizontalAlignment="Right" FontSize="22" FontWeight="SemiBold" /></Grid><local:HistoryChart x:Name="DiskChart" MetricName="Physical disk active" Unit="%" Height="200" /><TextBlock x:Name="DiskDetail" Foreground="#AABCC3" FontSize="12" /></StackPanel>
+                </Border>
+                <Border Grid.Row="1" Grid.Column="1" Background="#14222B" CornerRadius="10" Padding="17,15">
+                    <StackPanel Spacing="7"><Grid><TextBlock Text="NETWORK RECEIVE" Foreground="#91C2E3" FontSize="11" FontWeight="SemiBold" /><TextBlock x:Name="NetworkText" Text="Unavailable" HorizontalAlignment="Right" FontSize="22" FontWeight="SemiBold" /></Grid><local:HistoryChart x:Name="NetworkChart" MetricName="Network receive" Unit="B/s" Height="200" /><Grid><TextBlock x:Name="NetworkDetail" Foreground="#AABCC3" FontSize="12" /><TextBlock x:Name="NetworkScale" Text="Auto scale" HorizontalAlignment="Right" Foreground="#879BA5" FontSize="11" /></Grid></StackPanel>
+                </Border>
+            </Grid>
+        </StackPanel>
+    </ScrollViewer>
+</Page>
