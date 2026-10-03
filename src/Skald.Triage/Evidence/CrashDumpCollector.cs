@@ -1,6 +1,6 @@
 using Skald.Core.Models;
 
-namespace Skald.Collectors;
+namespace Skald.Triage;
 
 public static class CrashDumpCollector
 {

@@ -36,27 +36,32 @@
         <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="*" /></Grid.RowDefinitions>
         <Grid Grid.Row="0" Padding="20,10,20,10" Background="#0F202A">
             <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
-            <StackPanel x:Name="BrandPanel"><TextBlock Text="Skald" FontSize="25" FontWeight="SemiBold" Foreground="#E8F4F4" /><TextBlock Text="Observe  /  Explain  /  Replay" Foreground="#8DB1B7" FontSize="12" /></StackPanel>
+            <StackPanel x:Name="BrandPanel"><TextBlock Text="Skald" FontSize="25" FontWeight="SemiBold" Foreground="#E8F4F4" /><TextBlock Text="Check hardware  /  Investigate slowness" Foreground="#8DB1B7" FontSize="12" /></StackPanel>
             <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8"><TextBlock x:Name="LastUpdatedText" Text="Waiting for telemetry…" VerticalAlignment="Center" Foreground="#B7C9D0" FontSize="12" /><TextBlock x:Name="RecorderStatusText" Text="Rolling history: 5 min" VerticalAlignment="Center" Foreground="#B7C9D0" FontSize="12" /><Button x:Name="RecordButton" Content="● Record" Click="RecordButton_Click" /><Button x:Name="MarkerButton" Content="⚑ Mark Problem" Click="MarkerButton_Click" /><Button x:Name="AnalyzeButton" Content="Analyze Performance" Click="AnalyzePerformance_Click" /></StackPanel>
         </Grid>
-        <controls:NavigationView x:Name="RootNavigation" Grid.Row="1" PaneDisplayMode="Auto" CompactModeThresholdWidth="760" ExpandedModeThresholdWidth="1180" IsPaneOpen="True" OpenPaneLength="208" IsBackButtonVisible="Collapsed" IsSettingsVisible="False" SelectionChanged="RootNavigation_SelectionChanged">
+        <controls:NavigationView x:Name="RootNavigation" Grid.Row="1" PaneDisplayMode="Auto" CompactModeThresholdWidth="760" ExpandedModeThresholdWidth="1180" IsPaneOpen="True" OpenPaneLength="244" IsBackButtonVisible="Collapsed" IsSettingsVisible="False" SelectionChanged="RootNavigation_SelectionChanged">
             <controls:NavigationView.MenuItems>
-                <controls:NavigationViewItem Content="Overview" Tag="summary" Icon="Home" />
-                <controls:NavigationViewItem Content="Performance" Tag="performance" Icon="AllApps" IsExpanded="True">
+                <controls:NavigationViewItem Content="Home" Tag="home" Icon="Home" />
+                <controls:NavigationViewItem Content="Check hardware" Tag="triage" Icon="Repair" IsExpanded="True">
                     <controls:NavigationViewItem.MenuItems>
+                        <controls:NavigationViewItem Content="Devices &amp; drivers" Tag="hardware" />
+                        <controls:NavigationViewItem Content="Reliability &amp; events" Tag="reliability" />
+                        <controls:NavigationViewItem Content="Windows updates" Tag="updates" />
+                    </controls:NavigationViewItem.MenuItems>
+                </controls:NavigationViewItem>
+                <controls:NavigationViewItem Content="Investigate slowness" Tag="performance" Icon="AllApps" IsExpanded="True">
+                    <controls:NavigationViewItem.MenuItems>
+                        <controls:NavigationViewItem Content="Live overview" Tag="summary" />
                         <controls:NavigationViewItem Content="CPU" Tag="cpu" />
                         <controls:NavigationViewItem Content="Memory" Tag="memory" />
                         <controls:NavigationViewItem Content="GPU" Tag="gpu" />
                         <controls:NavigationViewItem Content="Disks" Tag="disks" />
                         <controls:NavigationViewItem Content="Network" Tag="network" />
+                        <controls:NavigationViewItem Content="Processes" Tag="processes" />
+                        <controls:NavigationViewItem Content="Power &amp; thermals" Tag="power" />
+                        <controls:NavigationViewItem Content="Recordings" Tag="sessions" />
                     </controls:NavigationViewItem.MenuItems>
                 </controls:NavigationViewItem>
-                <controls:NavigationViewItem Content="Processes" Tag="processes" Icon="Contact" />
-                <controls:NavigationViewItem Content="Power &amp; Thermals" Tag="power" Icon="Accept" />
-                <controls:NavigationViewItem Content="Reliability &amp; Events" Tag="reliability" Icon="Calendar" />
-                <controls:NavigationViewItem Content="Hardware" Tag="hardware" Icon="Repair" />
-                <controls:NavigationViewItem Content="Windows Updates" Tag="updates" Icon="Download" />
-                <controls:NavigationViewItem Content="Recordings" Tag="sessions" Icon="Folder" />
             </controls:NavigationView.MenuItems>
             <Frame x:Name="ContentFrame" />
         </controls:NavigationView>

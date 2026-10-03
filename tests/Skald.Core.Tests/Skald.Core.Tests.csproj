@@ -11,6 +11,8 @@
     <PackageReference Include="xunit.runner.visualstudio" Version="3.1.1" />
     <ProjectReference Include="..\..\src\Skald.Core\Skald.Core.csproj" />
     <ProjectReference Include="..\..\src\Skald.Collectors\Skald.Collectors.csproj" />
+    <ProjectReference Include="..\..\src\Skald.Triage\Skald.Triage.csproj" />
+    <ProjectReference Include="..\..\src\Skald.Cli\Skald.Cli.csproj" />
     <ProjectReference Include="..\..\src\Skald.Diagnostics\Skald.Diagnostics.csproj" />
     <ProjectReference Include="..\..\src\Skald.Recorder\Skald.Recorder.csproj" />
   </ItemGroup>

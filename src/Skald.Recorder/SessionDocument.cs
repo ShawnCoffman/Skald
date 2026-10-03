@@ -10,7 +10,8 @@ public sealed record SessionMetadata(
     string OperatingSystem,
     DateTimeOffset StartedAt,
     DateTimeOffset EndedAt,
-    int SampleIntervalSeconds);
+    int SampleIntervalSeconds,
+    bool Recovered = false);
 
 public sealed record SessionDocument(
     SessionMetadata Metadata,

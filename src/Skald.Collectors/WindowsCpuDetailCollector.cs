@@ -8,6 +8,8 @@ namespace Skald.Collectors;
 internal sealed class WindowsCpuDetailCollector : IDisposable
 {
     private readonly List<(string Id, PerformanceCounter Counter)> _usage = [];
+    private readonly PerformanceCounter? _performance;
+    private readonly PerformanceCounter? _baseFrequency;
     private bool _primed;
 
     public WindowsCpuDetailCollector()
@@ -19,6 +21,20 @@ internal sealed class WindowsCpuDetailCollector : IDisposable
                 _usage.Add((id, new PerformanceCounter("Processor Information", "% Processor Time", id, true)));
         }
         catch (Exception ex) when (ex is InvalidOperationException or UnauthorizedAccessException or System.ComponentModel.Win32Exception) { }
+        _performance = Create("% Processor Performance");
+        _baseFrequency = Create("Processor Frequency");
+    }
+
+    private static PerformanceCounter? Create(string counter)
+    {
+        try { return new PerformanceCounter("Processor Information", counter, "_Total", true); }
+        catch (Exception ex) when (ex is InvalidOperationException or UnauthorizedAccessException or System.ComponentModel.Win32Exception) { return null; }
+    }
+
+    private static double? Read(PerformanceCounter? counter)
+    {
+        try { return counter?.NextValue() is { } value && float.IsFinite(value) && value > 0 ? value : null; }
+        catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception) { return null; }
     }
 
     public CpuMetric Enrich(CpuMetric cpu)
@@ -37,12 +53,20 @@ internal sealed class WindowsCpuDetailCollector : IDisposable
                 && index >= 0 && index < clocks.Length && clocks[index].CurrentMhz > 0 ? clocks[index].CurrentMhz : null;
             rows.Add(new LogicalProcessorMetric(id, usage, mhz));
         }
+        var performance = Read(_performance);
+        var baseFrequency = Read(_baseFrequency);
+        double? effective = _primed && performance is { } percent && baseFrequency is { } baseline ? baseline * percent / 100 : null;
         _primed = true;
         var validClocks = available ? clocks.Where(clock => clock.CurrentMhz > 0).Select(clock => (double)clock.CurrentMhz).ToArray() : [];
-        return cpu with { ReportedMegahertz = validClocks.Length > 0 ? validClocks.Average() : null, LogicalProcessors = rows };
+        return cpu with { ReportedMegahertz = validClocks.Length > 0 ? validClocks.Average() : null, EffectiveMegahertz = effective, LogicalProcessors = rows };
     }
 
-    public void Dispose() { foreach (var item in _usage) item.Counter.Dispose(); }
+    public void Dispose()
+    {
+        foreach (var item in _usage) item.Counter.Dispose();
+        _performance?.Dispose();
+        _baseFrequency?.Dispose();
+    }
 
     private static int Component(string id, int position)
     {

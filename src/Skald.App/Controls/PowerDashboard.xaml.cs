@@ -43,7 +43,13 @@ public sealed partial class PowerDashboard : UserControl
         else missing.Add("GPU board power: no measured reading");
         if (snapshot.Power.DisplayBrightnessPercent is { } brightness) available.Add($"Display brightness: {brightness}%");
         else missing.Add("Display brightness: unavailable");
-        missing.Add("Thermal limiting and power limiting: no verified state available");
+        var zoneLimits = sensors.Where(sensor => sensor.Id.EndsWith("/passive-limit", StringComparison.Ordinal)).ToArray();
+        var limiting = sensors.Where(sensor => (sensor.Id.EndsWith("/passive-limit", StringComparison.Ordinal) && sensor.Value is < 100)
+            || (sensor.Id.EndsWith("/throttle-reasons", StringComparison.Ordinal) && sensor.Value is > 0)).ToArray();
+        if (limiting.Length > 0) available.Add("Platform thermal limit: ACTIVE (" + string.Join(", ", limiting.Select(sensor => $"{sensor.Device} {sensor.Name} {sensor.Value:F0}{(sensor.Unit == "%" ? "%" : string.Empty)}")) + ")");
+        else if (zoneLimits.Any(sensor => sensor.Value.HasValue)) available.Add("Platform thermal limit: none reported");
+        else missing.Add("Thermal limiting: no platform thermal zone reports a limit");
+        missing.Add("CPU power limiting (PL1/PL2): no verified state available");
         SystemPowerText.Text = available.Count > 0 ? string.Join("  ·  ", available) : "No measured power readings are available on this machine.";
         MissingSourcesText.Text = string.Join("\n", missing);
         var active = snapshot.Processes.Where(process => process.CpuAvailable && process.CpuPercent > 0 || process.GpuPercent is > 0)
@@ -53,7 +59,8 @@ public sealed partial class PowerDashboard : UserControl
         if (gpuPower?.Value is not null) headlines.Add(("GPU board power", Format(gpuPower.Value, "W"), gpuPower.Device));
         if (cpuPower?.Value is not null) headlines.Add(("CPU package", Format(cpuPower.Value, "W"), $"{cpuPower.Device} · {cpuPower.Source}"));
         if (temperature?.Value is not null) headlines.Add(("CPU temperature", Format(temperature.Value, "°C"), temperature.Name));
-        if (snapshot.Cpu.ReportedMegahertz is > 0) headlines.Add(("OS reported clock", Format(snapshot.Cpu.ReportedMegahertz / 1000, "GHz"), "Core average · not effective clock"));
+        if (snapshot.Cpu.EffectiveMegahertz is > 0) headlines.Add(("Effective clock (estimate)", Format(snapshot.Cpu.EffectiveMegahertz / 1000, "GHz"), "Base frequency × % Processor Performance"));
+        if (snapshot.Cpu.ReportedMegahertz is > 0) headlines.Add(("OS reported clock", Format(snapshot.Cpu.ReportedMegahertz / 1000, "GHz"), "Core average · often a nominal firmware value"));
         if (_headlines.Count != headlines.Count || _headlines.Where((headline, index) => headline.Name != headlines[index].Name).Any())
         {
             _headlines.Clear();
@@ -99,7 +106,7 @@ public sealed partial class PowerDashboard : UserControl
         CpuChart.SetTimedSeries(samples.Select(sample => (sample.Timestamp, sample.Cpu.Availability.IsSupported ? (double?)sample.Cpu.UtilizationPercent : null)), end, 100, Color.FromArgb(255, 95, 222, 185));
         var clockMax = Math.Max(1, samples.Select(sample => sample.Cpu.ReportedMegahertz.GetValueOrDefault() / 1000).Max() * 1.15);
         ClockChart.SetTimedSeries(samples.Select(sample => (sample.Timestamp, sample.Cpu.ReportedMegahertz / 1000)), end, clockMax, Color.FromArgb(255, 173, 150, 238));
-        ClockScaleText.Text = "Windows reported core-average clock; effective clock is unavailable.";
+        ClockScaleText.Text = "Windows reported core-average clock (often a nominal firmware value). The effective clock estimate is listed under sensors.";
         var power = samples.Select(sample => (sample.Timestamp, Value: SensorCatalog.GetSensors(sample).FirstOrDefault(sensor => sensor.Id == _selectedPower)?.Value)).ToArray();
         var max = Math.Max(10, power.Select(sample => sample.Value.GetValueOrDefault()).DefaultIfEmpty().Max() * 1.15);
         var hasPower = power.Any(sample => sample.Value.HasValue);

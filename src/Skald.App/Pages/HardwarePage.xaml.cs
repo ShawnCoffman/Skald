@@ -3,6 +3,7 @@ using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Skald.App.Controls;
 using Skald.Collectors;
+using Skald.Triage;
 using Skald.Core.Models;
 
 namespace Skald.App.Pages;

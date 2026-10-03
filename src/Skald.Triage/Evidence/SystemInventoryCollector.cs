@@ -4,13 +4,13 @@ using Microsoft.Win32;
 using Skald.Core.Models;
 using Windows.Management.Deployment;
 
-namespace Skald.Collectors;
+namespace Skald.Triage;
 
 public static class SystemInventoryCollector
 {
-    public static Task<SystemInventory> CollectAsync() => Task.Run(Collect);
+    public static Task<SystemInventory> CollectAsync(bool includeApplications = true) => Task.Run(() => Collect(includeApplications));
 
-    private static SystemInventory Collect()
+    private static SystemInventory Collect(bool includeApplications)
     {
         var result = new SystemInventory();
         result.Machine.Add(new("System name", Environment.MachineName));
@@ -56,7 +56,7 @@ public static class SystemInventoryCollector
             if (row["FreeSpace"] is ulong free && row["Size"] is ulong total && total > 0)
                 result.Volumes.Add(new($"{Value(row, "DeviceID")} {Value(row, "VolumeName")}", free, total));
         }, result, " WHERE DriveType = 3");
-        ReadApplications(result);
+        if (includeApplications) ReadApplications(result);
         try
         {
             using var cbs = Registry.LocalMachine.OpenSubKey(@"SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\RebootPending");

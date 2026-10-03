@@ -1,8 +1,65 @@
 # Skald
 
-Skald is an open-source Windows performance forensics tool. It is intended to explain why a Windows computer is slow, hot, power-hungry, or behaving differently than normal—and to make that behavior replayable after the problem has passed.
+Skald helps a support or hardware team answer two questions about a Windows laptop or desktop, and keep the two answers apart:
+
+1. **Check hardware.** Is it the hardware, a driver, or the BIOS? A one-minute, read-only scan of what Windows has already recorded (crashes, WHEA, storage, memory, graphics resets, firmware limits, device and driver problems, what changed), ending in a verdict and an evidence list.
+2. **Investigate slowness.** Why is it slow, hot or freezing? Live CPU, memory, disk, GPU, network, power and thermals, the processes behind them, and a recorder you can replay after the problem has passed.
+
+After either one, the Home page gives a one-line hand-off: hardware evidence exists, or the current constraint looks software-side (with the top contributor as a lead, never as proof).
+
+Both modes use the same words (**Found / Nothing found / Could not check**) and the same kind of finding: a statement, its evidence, and what it does *not* prove. Neither mode changes the machine.
+
+## Quick start
+
+The app (`Skald.exe`) opens on Home with two buttons. **Run hardware check** takes about a minute and can be saved as `.txt`, `.json`, `.html` or a `.zip` bundle for a ticket (with an option to remove computer name, serial number and user names). **Open live view**, **Record**, and **Mark Problem** cover the slowness side.
+
+### Command line
+
+The same hardware check runs headless, for remote sessions and scripts:
+
+```powershell
+.\tools\publish-cli.ps1                      # builds artifacts\cli\skald.exe (about 42 MB, no .NET install needed)
+skald triage                                 # print the report
+skald triage --out C:\Temp\case --zip        # also write txt/json/html reports as one zip
+skald triage --days 7 --redact               # shorter window; strip computer name, serial, user names, SIDs
+skald triage --save-baseline golden.json     # snapshot this machine's drivers, BIOS and OS build
+skald triage --baseline golden.json          # later: what changed against that snapshot
+skald triage --console json --quiet          # machine-readable output only
+```
+
+Exit codes: `0` nothing significant (clear, or minor findings only), `1` hardware evidence found, `2` check incomplete, `3` error (including report files that could not be written), `64` bad arguments or a `--baseline` file that does not exist.
+
+- Reports are named `SKALD-<computer>-<yyyyMMdd-HHmmss>` (`SKALD-host-…` with `--redact`): `.txt`, `.json`, `.html`, plus `-drivers.json` with the driver inventory. With `--redact`, device instance IDs keep their type (for example `USB\VID_…&PID_…`) but lose serial numbers and Bluetooth MAC addresses.
+- Console output is plain ASCII so Windows PowerShell 5.1 captures, redirects and `ConvertFrom-Json` read it correctly; saved files are UTF-8.
+- The report is printed before files are written. The driver snapshot only moves forward after the output succeeded, so a failed export does not hide driver changes from the next scan. `--baseline` leaves the previous-scan snapshot unchanged, and `--save-baseline` refuses to overwrite the file named by `--baseline`.
+- Ctrl+C stops the scan at the next step; a second Ctrl+C quits immediately. Run as administrator for the most complete result (kernel dump headers and some storage counters need it); every affected check says so rather than reporting a false "clear".
+
+### How the verdict works
+
+Each check is **Found**, **Nothing found**, **Could not check**, or **Not applicable**. Only hardware, driver and firmware checks decide the verdict: **evidence found**, **minor findings only** (small signals that also appear on healthy machines, such as one unexplained restart or a single USB device error), **no evidence found**, or **incomplete** (the System event log could not be read). Application crashes and hangs (with faulting module and exception code, so a crash inside the application's own code can be told apart from one inside a driver) and context (pending restart, low disk space, recent updates, driver and BIOS changes since the last scan or a baseline, BIOS age) are shown beside the verdict but never change it. "No evidence found" means Windows recorded nothing; it is not a hardware test, and the report says what was not covered.
+
+The scan keeps a driver, BIOS and OS-build snapshot at `%LOCALAPPDATA%\Skald\driver-snapshot.json` and compares the next scan against it. Use `--save-baseline` / `--baseline` to compare against a known-good snapshot instead.
+
+### Recording survives crashes
+
+While recording, each sample is also appended to a journal next to the session file (`*.perfsession.journal`). If the app, Windows or the power dies mid-recording, the next launch rebuilds the session from the journal and says so ("Recovered 1 interrupted recording"). A clean Stop removes the journal.
+
+### Layout of the code
+
+| Project | Role |
+|---|---|
+| `Skald.Core` | Models shared by everything |
+| `Skald.Collectors` | Live sampling every two seconds (counters, processes, GPU, network, power, thermal zones) |
+| `Skald.Triage` | One-shot evidence collectors, the rules and verdict, reports, redaction, driver snapshots |
+| `Skald.Diagnostics` | Rules over live samples (Analyze Performance) |
+| `Skald.Recorder` | Flight recorder, journal, replay documents |
+| `Skald.App` | WinUI 3 desktop app |
+| `Skald.Cli` | Command-line front end for the hardware check |
 
 ## Current milestone
+
+*(The sections below are the running engineering log. Where they describe navigation, Reliability & Events, Hardware, and Windows Updates now live under Check hardware, and the performance pages under Investigate slowness.)*
+
 
 The repository now contains the first live-telemetry slice:
 
@@ -119,3 +176,14 @@ Storage joins Windows disk numbers to partitions and their access paths, and sho
 The per-disk incident timeline lists recent high-latency samples from the rolling telemetry window and retained storage driver reports. It links events only when the message contains an explicit disk number and that number identifies one current disk during the present boot; the link is still labeled **probable**. Port-only controller resets, conflicting identifiers, and reports from earlier boots remain unassigned. A report near sampled latency is shown as a timing correlation, not proof of a failed drive or controller. Recent telemetry exists only while Skald is running; Windows event retention controls older report coverage.
 
 Graphics identity uses Windows PnP IDs, but NVIDIA vendor sensors remain unmapped until an adapter identity can be verified. Network live rates use an exact interface GUID. Battery capacity is per pack where Windows exposes it; discharge rate is system aggregate. WHEA events remain unassigned because an error source alone does not identify the replaceable failing part. Source coverage shows when a WMI source is empty, unavailable, or partial.
+
+## Hardware check update (2026-10-02)
+
+- New `Skald.Triage` project holds the one-shot evidence collectors (event logs, hardware inventory, system inventory, drivers, dumps, Windows Update) that used to sit in `Skald.Collectors`, plus the rules engine, report writers, redaction and driver snapshots. `Skald.Cli` and the app both call it, so the console, HTML and in-app results use the same rules.
+- Checks: crashes and unexpected restarts (stop code, lean toward hardware/driver/memory/storage/graphics, long power-button press = hung machine forced off, kernel dump header stop codes), WHEA, storage, memory (including Windows Memory Diagnostic results), graphics driver resets and GPU hangs, firmware throttling (Kernel-Processor-Power 37), Device Manager problems, driver signing and load failures, battery capacity. Application crashes and hangs are parsed for faulting module, exception code and whether the module is the application's own, a Windows component or a graphics driver.
+- Generic user-mode driver reflector warnings (`\Driver\WUDFRd`) are ignored for the driver check because they appear on healthy machines whenever a device is unplugged.
+- Kernel dump parsing reads only the fixed header of 64-bit kernel dumps (stop code and parameters). It does not name the faulting driver; use WinDbg for that. Reading `%SystemRoot%\Minidump` and `MEMORY.DMP` normally needs administrator rights.
+- Windows Update history times were previously treated as local time; WUA reports UTC, so they were shifted by the UTC offset. Fixed.
+- Live telemetry now includes an effective CPU clock estimate (base frequency x `% Processor Performance`) and ACPI thermal-zone temperature, passive limit and throttle reasons. Analyze Performance adds a *Platform thermal limit* rule when a zone's passive limit stays below 100% or a throttle reason is set for 30 seconds. Thermal zones are platform sensors, not necessarily the CPU die.
+- New event categories in Reliability & Events: *Firmware & diagnostics*.
+- Known limits: the scan runs no stress test; unsigned-driver detection depends on `Win32_PnPSignedDriver`; thresholds for "minor" versus "evidence" are conservative defaults in `TriageEngine` and should be tuned against real fleet data.

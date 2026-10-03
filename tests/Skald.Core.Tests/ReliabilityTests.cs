@@ -9,9 +9,9 @@ public sealed class ReliabilityTests
     public void SeparatesErrorReportingSignatures()
     {
         const string raw = "<Event><EventData><Data Name='EventName'>LiveKernelEvent</Data><Data Name='P1'>1b8</Data></EventData></Event>";
-        Assert.Equal("LiveKernelEvent · 1b8", Skald.Collectors.WindowsReliabilityCollector.Component(raw, "Windows Error Reporting"));
-        Assert.NotEqual(Skald.Collectors.WindowsReliabilityCollector.Component(raw, "Windows Error Reporting"),
-            Skald.Collectors.WindowsReliabilityCollector.Component(raw.Replace("1b8", "141", StringComparison.Ordinal), "Windows Error Reporting"));
+        Assert.Equal("LiveKernelEvent · 1b8", Skald.Triage.WindowsReliabilityCollector.Component(raw, "Windows Error Reporting"));
+        Assert.NotEqual(Skald.Triage.WindowsReliabilityCollector.Component(raw, "Windows Error Reporting"),
+            Skald.Triage.WindowsReliabilityCollector.Component(raw.Replace("1b8", "141", StringComparison.Ordinal), "Windows Error Reporting"));
     }
     [Theory]
     [InlineData("Microsoft-Windows-WHEA-Logger", 19, "Hardware")]

@@ -1772,3 +1772,8 @@ Reliability & Events checkpoint (2026-09-26)
 - Added range/category/search/day filters, report timeline, recurring grouping, occurrences, message/XML inspection, and source coverage.
 - Added tests for provider-aware classification, exact-record deduplication, and unclean-shutdown interpretation.
 - Future: broader driver-change history, saved-session correlation, and dump analysis. Current counts describe available Windows reports, not unique incidents or a fabricated reliability score.
+
+Hardware check / slowness split checkpoint (2026-10-02)
+- Product is now two doors on one set of libraries: Check hardware (Skald.Triage + Skald.Cli, ~1 minute, read-only, verdict + evidence) and Investigate slowness (live view, recorder, replay). Home page hands off between them.
+- Added: Skald.Triage (evidence collectors moved from Skald.Collectors, TriageEngine, reports, redaction, driver snapshots/baselines, dump header reader, bugcheck catalog, app fault parser), Skald.Cli (skald triage), Home and Hardware check pages, grouped navigation, crash-safe recording journal with recovery on next launch, effective clock estimate, ACPI thermal zone sensors and a platform thermal limit rule.
+- Still planned: elevated mode in the app, dump analysis that names the faulting module, vendor-specific diagnostics hooks, fleet baseline distribution, SQLite session storage, per-process growth rules (leak detection) in the recorder, tuning of minor/evidence thresholds against real fleet data.

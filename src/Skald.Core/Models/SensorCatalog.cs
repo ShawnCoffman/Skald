@@ -10,8 +10,11 @@ public static class SensorCatalog
         if (!result.Any(sensor => sensor.Scope == "CPU package" && sensor.Kind == "Power"))
             result.Add(new SensorMetric("cpu/package/unavailable", "CPU", "CPU package power", "Power", "W", null,
                 "No identified provider", "CPU package", "An existing LibreHardwareMonitor/OpenHardwareMonitor WMI provider can supply supported CPU sensors."));
-        result.Add(new SensorMetric("cpu/effective/unavailable", "CPU", "Effective clock", "Clock", "MHz", null,
-            "Not collected", "Effective clock"));
+        result.Add(snapshot.Cpu.EffectiveMegahertz is { } effective
+            ? new SensorMetric("cpu/effective/clock", "CPU", "Effective clock (estimate)", "Clock", "MHz", effective,
+                "Windows Processor Information counters", "Effective clock", "Base frequency x % Processor Performance across all logical processors. Reflects boost and throttling; it is an estimate, not a per-core measurement.")
+            : new SensorMetric("cpu/effective/unavailable", "CPU", "Effective clock", "Clock", "MHz", null,
+                "Not collected", "Effective clock"));
         if (!result.Any(sensor => sensor.Scope == "CPU sensor" && sensor.Kind == "Temperature"))
             result.Add(new SensorMetric("cpu/temperature/unavailable", "CPU", "CPU temperature", "Temperature", "°C", null,
                 "No identified provider", "CPU sensor"));

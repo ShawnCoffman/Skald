@@ -5,6 +5,7 @@ using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Controls.Primitives;
 using Skald.App.Controls;
 using Skald.Collectors;
+using Skald.Triage;
 using Skald.Core.Models;
 using Skald.Diagnostics;
 using Skald.Recorder;

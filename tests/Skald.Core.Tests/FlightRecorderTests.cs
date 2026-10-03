@@ -162,6 +162,146 @@ public sealed class FlightRecorderTests
         }
     }
 
+    [Fact]
+    public async Task JournalExistsWhileRecordingAndIsRemovedAfterStop()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"skald-{Guid.NewGuid():N}.perfsession");
+        var journal = path + ".journal";
+        try
+        {
+            var recorder = new FlightRecorder();
+            recorder.Start(path, 2);
+            Assert.True(recorder.IsJournaling);
+            Assert.True(File.Exists(journal));
+            recorder.Append(CreateSnapshot(DateTimeOffset.UtcNow));
+            Assert.Null(await FlightRecorder.RecoverAsync(journal)); // still open by the live recorder
+            Assert.True(File.Exists(journal));
+            Assert.Equal(path, await recorder.StopAsync());
+            Assert.False(File.Exists(journal));
+            Assert.False(recorder.IsJournaling);
+            recorder.Dispose();
+        }
+        finally { File.Delete(path); File.Delete(journal); }
+    }
+
+    [Fact]
+    public async Task InterruptedRecordingIsRecoveredFromItsJournal()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"skald-{Guid.NewGuid():N}.perfsession");
+        var journal = path + ".journal";
+        try
+        {
+            var now = DateTimeOffset.UtcNow;
+            var recorder = new FlightRecorder();
+            recorder.Start(path, 2, [CreateSnapshot(now.AddSeconds(-4))]);
+            recorder.Append(CreateSnapshot(now.AddSeconds(-2)));
+            recorder.Append(CreateSnapshot(now));
+            recorder.AddMarker("froze");
+            recorder.Dispose(); // the app dies here: no Stop, no final save
+            Assert.False(File.Exists(path));
+            Assert.Contains(journal, FlightRecorder.FindInterruptedJournals(Path.GetTempPath()), StringComparer.OrdinalIgnoreCase);
+
+            Assert.Equal(path, await FlightRecorder.RecoverAsync(journal));
+            var document = await FlightRecorder.LoadAsync(path);
+            Assert.Equal(3, document.Samples.Count);
+            Assert.True(document.Metadata.Recovered);
+            Assert.Equal(now, document.Metadata.EndedAt);
+            Assert.Contains(document.Events, item => item.Type == SessionEventType.UserMarker && item.Note == "froze");
+            Assert.False(File.Exists(journal));
+        }
+        finally { File.Delete(path); File.Delete(journal); }
+    }
+
+    [Fact]
+    public async Task TruncatedJournalStillRecoversTheSamplesBeforeTheCut()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"skald-{Guid.NewGuid():N}.perfsession");
+        var journal = path + ".journal";
+        try
+        {
+            var now = DateTimeOffset.UtcNow;
+            var recorder = new FlightRecorder();
+            recorder.Start(path, 2);
+            for (var i = 0; i < 4; i++) recorder.Append(CreateSnapshot(now.AddSeconds(i * 2)));
+            recorder.Dispose();
+            // Each entry is its own gzip member; cut the file in the middle of the last one, as a power loss mid-write would.
+            var bytes = await File.ReadAllBytesAsync(journal);
+            var header = bytes[..4];
+            var lastMember = bytes.AsSpan().LastIndexOf(header);
+            Assert.True(lastMember > 0);
+            await File.WriteAllBytesAsync(journal, bytes[..(lastMember + (bytes.Length - lastMember) / 2)]);
+
+            Assert.Equal(path, await FlightRecorder.RecoverAsync(journal));
+            var document = await FlightRecorder.LoadAsync(path);
+            Assert.Equal(3, document.Samples.Count);
+            Assert.Equal(now, document.Samples[0].Timestamp);
+        }
+        finally { File.Delete(path); File.Delete(journal); }
+    }
+
+    [Fact]
+    public async Task FailedStopKeepsTheRecordingLiveForARetry()
+    {
+        var blocker = Path.Combine(Path.GetTempPath(), $"skald-blocker-{Guid.NewGuid():N}");
+        await File.WriteAllTextAsync(blocker, "a file where a directory is needed");
+        try
+        {
+            var recorder = new FlightRecorder();
+            recorder.Start(Path.Combine(blocker, "session.perfsession"), 2);
+            recorder.Append(CreateSnapshot(DateTimeOffset.UtcNow));
+            await Assert.ThrowsAnyAsync<IOException>(() => recorder.StopAsync());
+            Assert.True(recorder.IsRecording);
+            Assert.Equal(1, recorder.SampleCount);
+            recorder.Dispose();
+        }
+        finally { File.Delete(blocker); }
+    }
+
+    [Fact]
+    public async Task EmptyOrUnrelatedJournalsAreNotRecovered()
+    {
+        var folder = Path.Combine(Path.GetTempPath(), $"skald-journals-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(folder);
+        try
+        {
+            var journal = Path.Combine(folder, "empty.perfsession.journal");
+            await File.WriteAllBytesAsync(journal, []);
+            await File.WriteAllBytesAsync(Path.Combine(folder, "other.journal"), []);
+            Assert.Equal([journal], FlightRecorder.FindInterruptedJournals(folder));
+            Assert.Null(await FlightRecorder.RecoverAsync(journal));
+            Assert.False(File.Exists(journal)); // nothing usable: cleaned up instead of re-read on every launch
+            Assert.Empty(FlightRecorder.FindInterruptedJournals(Path.Combine(folder, "does-not-exist")));
+        }
+        finally { Directory.Delete(folder, recursive: true); }
+    }
+
+    [Fact]
+    public async Task RecoveryNeverReplacesAMoreCompleteSession()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"skald-{Guid.NewGuid():N}.perfsession");
+        var journal = path + ".journal";
+        try
+        {
+            var now = DateTimeOffset.UtcNow;
+            var complete = new FlightRecorder();
+            complete.Start(path, 2);
+            for (var i = 0; i < 3; i++) complete.Append(CreateSnapshot(now.AddSeconds(i * 2)));
+            await complete.StopAsync();
+            complete.Dispose();
+
+            // A leftover journal holding less (for example from a Stop whose journal cleanup failed) must not overwrite the saved file.
+            var leftover = new FlightRecorder();
+            leftover.Start(path, 2);
+            leftover.Append(CreateSnapshot(now));
+            leftover.Dispose();
+
+            Assert.Null(await FlightRecorder.RecoverAsync(journal));
+            Assert.Equal(3, (await FlightRecorder.LoadAsync(path)).Samples.Count);
+            Assert.False(File.Exists(journal));
+        }
+        finally { File.Delete(path); File.Delete(journal); }
+    }
+
     private static SystemMetricsSnapshot CreateSnapshot(DateTimeOffset timestamp) => new(
         timestamp,
         new CpuMetric(10, 8, MetricAvailability.Supported) { ReportedMegahertz = 4200 },
