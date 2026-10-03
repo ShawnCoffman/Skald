@@ -11,12 +11,18 @@ public static class WindowsReliabilityCollector
     // Uncategorized records are skipped before their message is formatted, so a high cap mostly costs enumeration time.
     private const int ScanCap = 20000;
 
-    public static Task<ReliabilityHistory> CollectAsync() => Task.Run(Collect);
+    public static Task<ReliabilityHistory> CollectAsync() => Task.Run(() => Collect(null, null));
 
-    private static ReliabilityHistory Collect()
+    // Only the records written between from and to: a recording saves the reports from its own time window.
+    public static Task<ReliabilityHistory> CollectAsync(DateTimeOffset from, DateTimeOffset to) => Task.Run(() => Collect(from, to));
+
+    private static ReliabilityHistory Collect(DateTimeOffset? from, DateTimeOffset? to)
     {
         var now = DateTimeOffset.Now;
-        var cutoff = now.AddDays(-30);
+        var cutoff = from ?? now.AddDays(-30);
+        var end = to ?? now;
+        var time = from is null && to is null ? "timediff(@SystemTime) <= 2592000000"
+            : $"@SystemTime >= '{Utc(cutoff)}' and @SystemTime <= '{Utc(end)}'";
         var events = new List<ReliabilityEvent>();
         var status = new List<string>();
         var nativeLogs = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -28,7 +34,7 @@ public static class WindowsReliabilityCollector
             DateTimeOffset? oldest = null;
             try
             {
-                var query = new EventLogQuery(log, PathType.LogName, "*[System[TimeCreated[timediff(@SystemTime) <= 2592000000] and (Level=1 or Level=2 or Level=3 or Provider[@Name='Microsoft-Windows-WindowsUpdateClient'] or Provider[@Name='MsiInstaller'] or Provider[@Name='Windows Error Reporting'] or Provider[@Name='Microsoft-Windows-WHEA-Logger'] or Provider[@Name='Microsoft-Windows-MemoryDiagnostics-Results'])]]") { ReverseDirection = true };
+                var query = new EventLogQuery(log, PathType.LogName, $"*[System[TimeCreated[{time}] and (Level=1 or Level=2 or Level=3 or Provider[@Name='Microsoft-Windows-WindowsUpdateClient'] or Provider[@Name='MsiInstaller'] or Provider[@Name='Windows Error Reporting'] or Provider[@Name='Microsoft-Windows-WHEA-Logger'] or Provider[@Name='Microsoft-Windows-MemoryDiagnostics-Results'])]]") { ReverseDirection = true };
                 using var reader = new EventLogReader(query);
                 while (read < ScanCap)
                 {
@@ -64,7 +70,7 @@ public static class WindowsReliabilityCollector
         try
         {
             var date = ManagementDateTimeConverter.ToDmtfDateTime(cutoff.UtcDateTime);
-            using var searcher = new ManagementObjectSearcher("root\\CIMV2", $"SELECT TimeGenerated,Logfile,RecordNumber,SourceName,EventIdentifier,ProductName,Message FROM Win32_ReliabilityRecords WHERE TimeGenerated >= '{date}'", new System.Management.EnumerationOptions { Timeout = TimeSpan.FromSeconds(10) });
+            using var searcher = new ManagementObjectSearcher("root\\CIMV2", $"SELECT TimeGenerated,Logfile,RecordNumber,SourceName,EventIdentifier,ProductName,Message FROM Win32_ReliabilityRecords WHERE TimeGenerated >= '{date}' AND TimeGenerated <= '{ManagementDateTimeConverter.ToDmtfDateTime(end.UtcDateTime)}'", new System.Management.EnumerationOptions { Timeout = TimeSpan.FromSeconds(10) });
             using var rows = searcher.Get();
             var read = 0;
             foreach (ManagementBaseObject row in rows)
@@ -90,8 +96,9 @@ public static class WindowsReliabilityCollector
         { status.Add($"Reliability history: unavailable / partial ({ex.GetType().Name})"); }
         // Prefer native log records, which include severity and structured data, over their WMI copies.
         var distinct = events.DistinctBy(item => $"{item.Log}|{item.RecordId}|{item.Timestamp.ToUnixTimeSeconds()}", StringComparer.OrdinalIgnoreCase);
-        return new(now, ReliabilityAnalysis.Deduplicate(distinct.Where(item => item.Timestamp >= cutoff && item.Timestamp <= now)), status) { TruncatedAt = truncated };
+        return new(now, ReliabilityAnalysis.Deduplicate(distinct.Where(item => item.Timestamp >= cutoff && item.Timestamp <= end)), status) { TruncatedAt = truncated };
 
+        static string Utc(DateTimeOffset time) => time.UtcDateTime.ToString("yyyy-MM-dd'T'HH:mm:ss.fff'Z'", CultureInfo.InvariantCulture);
         static string Stamp(DateTimeOffset? time) => time?.ToLocalTime().ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture) ?? "the cap";
     }
 

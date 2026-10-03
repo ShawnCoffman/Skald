@@ -21,6 +21,10 @@ internal sealed class NvidiaGpuCollector : IDisposable
     private NvmlDeviceGetMemoryInfo? _getMemory;
     private NvmlDeviceGetClockInfo? _getClock;
     private NvmlDeviceGetName? _getUuid;
+    private NvmlDeviceGetPowerUsage? _getPowerLimit;
+    private NvmlDeviceGetPerformanceState? _getPerformanceState;
+    private NvmlDeviceGetPowerUsage? _getFanSpeed;
+    private NvmlDeviceGetClockReasons? _getClockReasons;
     private DateTimeOffset _retryAfter;
     private bool _initialized;
     private bool _disposed;
@@ -56,7 +60,12 @@ internal sealed class NvidiaGpuCollector : IDisposable
                 {
                     DeviceId = id,
                     GraphicsClockMegahertz = _getClock is not null && _getClock(handle, 0, out var graphicsClock) == 0 ? graphicsClock : null,
-                    MemoryClockMegahertz = _getClock is not null && _getClock(handle, 2, out var memoryClock) == 0 ? memoryClock : null
+                    MemoryClockMegahertz = _getClock is not null && _getClock(handle, 2, out var memoryClock) == 0 ? memoryClock : null,
+                    PowerLimitWatts = _getPowerLimit is not null && _getPowerLimit(handle, out var limit) == 0 && limit > 0 ? limit / 1000d : null,
+                    // 32 is NVML_PSTATE_UNKNOWN.
+                    PerformanceState = _getPerformanceState is not null && _getPerformanceState(handle, out var state) == 0 && state is >= 0 and < 16 ? state : null,
+                    FanSpeedPercent = _getFanSpeed is not null && _getFanSpeed(handle, out var fan) == 0 ? fan : null,
+                    ClockLimitReasons = _getClockReasons is not null && _getClockReasons(handle, out var reasons) == 0 ? reasons : null
                 });
             }
             return devices;
@@ -84,6 +93,12 @@ internal sealed class NvidiaGpuCollector : IDisposable
         _getMemory = GetExport<NvmlDeviceGetMemoryInfo>("nvmlDeviceGetMemoryInfo");
         _getClock = GetExport<NvmlDeviceGetClockInfo>("nvmlDeviceGetClockInfo");
         _getUuid = GetExport<NvmlDeviceGetName>("nvmlDeviceGetUUID");
+        _getPowerLimit = GetExport<NvmlDeviceGetPowerUsage>("nvmlDeviceGetEnforcedPowerLimit");
+        _getPerformanceState = GetExport<NvmlDeviceGetPerformanceState>("nvmlDeviceGetPerformanceState");
+        _getFanSpeed = GetExport<NvmlDeviceGetPowerUsage>("nvmlDeviceGetFanSpeed");
+        // Renamed from "throttle reasons" in newer drivers; same bit mask.
+        _getClockReasons = GetExport<NvmlDeviceGetClockReasons>("nvmlDeviceGetCurrentClocksEventReasons")
+            ?? GetExport<NvmlDeviceGetClockReasons>("nvmlDeviceGetCurrentClocksThrottleReasons");
         if (_initialize is null || _shutdown is null || _getCount is null || _getHandle is null || _getName is null || _initialize() != 0)
         {
             ReleaseLibrary();
@@ -140,4 +155,6 @@ internal sealed class NvidiaGpuCollector : IDisposable
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate int NvmlDeviceGetPowerUsage(IntPtr device, out uint milliwatts);
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate int NvmlDeviceGetMemoryInfo(IntPtr device, out NvmlMemoryInfo memory);
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate int NvmlDeviceGetClockInfo(IntPtr device, uint clockType, out uint megahertz);
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate int NvmlDeviceGetPerformanceState(IntPtr device, out int state);
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)] private delegate int NvmlDeviceGetClockReasons(IntPtr device, out ulong reasons);
 }

@@ -1,9 +1,12 @@
-using System.IO.Compression;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Skald.Core.Models;
 
 namespace Skald.Recorder;
+
+// Collects the Windows evidence for a recording's time window; called while Stop or recovery saves the session. Returning null
+// (or throwing) saves the session without it.
+public delegate Task<SessionWindowsEvidence?> SessionEvidenceSource(SessionMetadata metadata, CancellationToken cancellationToken);
 
 public sealed class FlightRecorder : IDisposable
 {
@@ -18,6 +21,12 @@ public sealed class FlightRecorder : IDisposable
     private readonly SemaphoreSlim _writeGate = new(1, 1);
     private readonly List<SystemMetricsSnapshot> _samples = [];
     private readonly List<SessionEvent> _events = [];
+    private readonly List<SessionTrace> _traces = [];
+    private readonly Dictionary<SessionEventType, DateTimeOffset> _activeConditions = [];
+    // Process names, paths and user names repeat in every sample; one shared copy keeps a long recording's memory down.
+    private readonly Dictionary<string, string> _strings = new(StringComparer.Ordinal);
+    private SystemMetricsSnapshot? _previous;
+    private SessionMachine? _machine;
     private string? _filePath;
     private SessionMetadata? _metadata;
     private SessionJournal? _journal;
@@ -35,6 +44,7 @@ public sealed class FlightRecorder : IDisposable
         }
     }
 
+    // Time of the first saved sample, including pre-roll.
     public DateTimeOffset? StartedAt
     {
         get
@@ -46,6 +56,17 @@ public sealed class FlightRecorder : IDisposable
         }
     }
 
+    public string? FilePath
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _filePath;
+            }
+        }
+    }
+
     public int SampleCount
     {
         get
@@ -53,6 +74,17 @@ public sealed class FlightRecorder : IDisposable
             lock (_gate)
             {
                 return _samples.Count;
+            }
+        }
+    }
+
+    public int MarkerCount
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _events.Count(item => item.Type == SessionEventType.UserMarker);
             }
         }
     }
@@ -72,11 +104,16 @@ public sealed class FlightRecorder : IDisposable
             _filePath = Path.GetFullPath(filePath);
             _samples.Clear();
             _events.Clear();
+            _traces.Clear();
+            _activeConditions.Clear();
+            _strings.Clear();
+            _previous = null;
+            _machine = null;
             if (preRoll is not null)
             {
                 foreach (var sample in preRoll.Where(sample => sample.Timestamp <= startedAt && sample.Timestamp >= startedAt.AddMinutes(-5))
                              .OrderBy(sample => sample.Timestamp).DistinctBy(sample => sample.Timestamp))
-                    _samples.Add(sample);
+                    _samples.Add(Compact(sample));
             }
             _metadata = new SessionMetadata(
                 Guid.NewGuid(),
@@ -88,6 +125,8 @@ public sealed class FlightRecorder : IDisposable
                 startedAt,
                 sampleIntervalSeconds);
             _journal = OpenJournal(_filePath, _metadata, _samples);
+            // Pre-roll gets the same automatic events as live samples, so the minutes before Record are just as readable.
+            foreach (var sample in _samples) AddAutomaticEvents(sample);
         }
     }
 
@@ -127,9 +166,10 @@ public sealed class FlightRecorder : IDisposable
             }
 
             if (_samples.Count > 0 && snapshot.Timestamp <= _samples[^1].Timestamp) return;
-            _samples.Add(snapshot);
-            _journal?.WriteSample(snapshot);
-            AddAutomaticEvents(snapshot);
+            var sample = Compact(snapshot);
+            _samples.Add(sample);
+            _journal?.WriteSample(sample);
+            AddAutomaticEvents(sample);
         }
     }
 
@@ -144,12 +184,37 @@ public sealed class FlightRecorder : IDisposable
         }
     }
 
-    public async Task<string?> StopAsync(CancellationToken cancellationToken = default)
+    // Machine identity can take several seconds to read; it is attached whenever it arrives.
+    public void SetMachine(SessionMachine machine)
+    {
+        ArgumentNullException.ThrowIfNull(machine);
+        lock (_gate)
+        {
+            if (_metadata is null) return;
+            _machine = machine;
+            _journal?.WriteMachine(machine);
+        }
+    }
+
+    // Records a deep trace saved beside the session. Accepted while Stop is saving, so the final trace is part of the session.
+    public void AddTrace(SessionTrace trace)
+    {
+        ArgumentNullException.ThrowIfNull(trace);
+        lock (_gate)
+        {
+            if (_metadata is null) return;
+            _traces.Add(trace);
+            _journal?.WriteTrace(trace);
+            AddEvent(new SessionEvent(trace.SavedAt, SessionEventType.DeepTraceSaved, $"{trace.Reason} · {trace.FileName}"));
+        }
+    }
+
+    public async Task<string?> StopAsync(SessionEvidenceSource? evidence = null, CancellationToken cancellationToken = default)
     {
         await _writeGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            SessionDocument document;
+            SessionMetadata metadata;
             string filePath;
             lock (_gate)
             {
@@ -158,12 +223,18 @@ public sealed class FlightRecorder : IDisposable
                 // "recording" until the save finishes, so nothing can start a new recording over it.
                 _stopping = true;
                 filePath = _filePath;
-                document = new SessionDocument(_metadata with { EndedAt = DateTimeOffset.UtcNow }, _samples.ToArray(), _events.ToArray());
+                metadata = _metadata with { EndedAt = DateTimeOffset.UtcNow };
             }
-            try { await SaveAtomicAsync(document, filePath, cancellationToken).ConfigureAwait(false); }
+            try
+            {
+                var windows = await CollectAsync(evidence, metadata, cancellationToken).ConfigureAwait(false);
+                SessionDocument document;
+                lock (_gate) document = BuildDocument(metadata) with { WindowsEvidence = windows };
+                await SaveAtomicAsync(document, filePath, cancellationToken).ConfigureAwait(false);
+            }
             catch
             {
-                // The recording (and its journal) stays live so Stop can be retried.
+                // The recording (and its journal) stays live so Stop can be retried. This also covers a cancelled evidence read.
                 lock (_gate) _stopping = false;
                 throw;
             }
@@ -174,6 +245,9 @@ public sealed class FlightRecorder : IDisposable
                 _journal = null;
                 _metadata = null;
                 _filePath = null;
+                _previous = null;
+                _machine = null;
+                _strings.Clear();
                 _stopping = false;
             }
             // The complete file is on disk; the journal has done its job.
@@ -193,13 +267,24 @@ public sealed class FlightRecorder : IDisposable
             lock (_gate)
             {
                 if (_metadata is null || _filePath is null) return null;
-                document = new SessionDocument(_metadata with { EndedAt = DateTimeOffset.UtcNow }, _samples.ToArray(), _events.ToArray());
+                document = BuildDocument(_metadata with { EndedAt = DateTimeOffset.UtcNow });
                 filePath = _filePath;
             }
             await SaveAtomicAsync(document, filePath, cancellationToken).ConfigureAwait(false);
             return filePath;
         }
         finally { _writeGate.Release(); }
+    }
+
+    // Callers hold _gate.
+    private SessionDocument BuildDocument(SessionMetadata metadata)
+        => new(metadata, _samples.ToArray(), _events.OrderBy(item => item.Timestamp).ToArray()) { Machine = _machine, Traces = _traces.ToArray() };
+
+    private static async Task<SessionWindowsEvidence?> CollectAsync(SessionEvidenceSource? evidence, SessionMetadata metadata, CancellationToken cancellationToken)
+    {
+        if (evidence is null) return null;
+        try { return await evidence(metadata, cancellationToken).ConfigureAwait(false); }
+        catch (Exception ex) when (ex is not OutOfMemoryException and not OperationCanceledException) { return null; }
     }
 
     private static async Task SaveAtomicAsync(SessionDocument document, string filePath, CancellationToken cancellationToken)
@@ -210,11 +295,27 @@ public sealed class FlightRecorder : IDisposable
         try
         {
             await using (var file = File.Create(temporary))
-            await using (var gzip = new GZipStream(file, CompressionLevel.Fastest))
-                await JsonSerializer.SerializeAsync(gzip, document, JsonOptions, cancellationToken).ConfigureAwait(false);
+            await using (var compressed = SessionFileFormat.Compress(file))
+                await JsonSerializer.SerializeAsync(compressed, document, JsonOptions, cancellationToken).ConfigureAwait(false);
             File.Move(temporary, filePath, overwrite: true);
         }
         finally { if (File.Exists(temporary)) File.Delete(temporary); }
+    }
+
+    // Writes a document produced elsewhere (for example a redacted export) in the session file format.
+    public static Task SaveAsync(SessionDocument document, string filePath, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(document);
+        ArgumentException.ThrowIfNullOrWhiteSpace(filePath);
+        return SaveAtomicAsync(document, filePath, cancellationToken);
+    }
+
+    public static async Task WriteAsync(SessionDocument document, Stream destination, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(document);
+        ArgumentNullException.ThrowIfNull(destination);
+        await using var compressed = SessionFileFormat.Compress(destination, leaveOpen: true);
+        await JsonSerializer.SerializeAsync(compressed, document, JsonOptions, cancellationToken).ConfigureAwait(false);
     }
 
     public static async Task<SessionDocument> LoadAsync(string filePath, CancellationToken cancellationToken = default)
@@ -222,8 +323,8 @@ public sealed class FlightRecorder : IDisposable
         ArgumentException.ThrowIfNullOrWhiteSpace(filePath);
 
         await using var file = File.OpenRead(filePath);
-        await using var gzip = new GZipStream(file, CompressionMode.Decompress);
-        var document = await JsonSerializer.DeserializeAsync<SessionDocument>(gzip, JsonOptions, cancellationToken);
+        await using var decompressed = SessionFileFormat.Decompress(file);
+        var document = await JsonSerializer.DeserializeAsync<SessionDocument>(decompressed, JsonOptions, cancellationToken);
         return document ?? throw new InvalidDataException("The session file did not contain a session document.");
     }
 
@@ -234,32 +335,105 @@ public sealed class FlightRecorder : IDisposable
         _journal?.WriteEvent(item);
     }
 
-    private void AddAutomaticEvents(SystemMetricsSnapshot snapshot)
+    // Callers hold _gate.
+    private SystemMetricsSnapshot Compact(SystemMetricsSnapshot snapshot)
     {
-        if (snapshot.Cpu.Availability.IsSupported && snapshot.Cpu.UtilizationPercent >= 90)
+        var changed = false;
+        var processes = new ProcessMetric[snapshot.Processes.Count];
+        for (var index = 0; index < processes.Length; index++)
         {
-            AddEvent(new SessionEvent(snapshot.Timestamp, SessionEventType.CpuSaturation, $"CPU {snapshot.Cpu.UtilizationPercent:F1}%"));
+            var process = snapshot.Processes[index];
+            var name = Share(process.Name)!;
+            var path = Share(process.ExecutablePath);
+            var user = Share(process.UserName);
+            if (ReferenceEquals(name, process.Name) && ReferenceEquals(path, process.ExecutablePath) && ReferenceEquals(user, process.UserName))
+                processes[index] = process;
+            else
+            {
+                processes[index] = process with { Name = name, ExecutablePath = path, UserName = user };
+                changed = true;
+            }
         }
+        return changed ? snapshot with { Processes = processes } : snapshot;
 
-        if (snapshot.Memory.Availability.IsSupported && snapshot.Memory.UsedPercent >= 90 && snapshot.Memory.AvailableBytes <= 1024UL * 1024 * 1024)
+        string? Share(string? value)
         {
-            AddEvent(new SessionEvent(snapshot.Timestamp, SessionEventType.MemoryPressure, $"Low available memory · {snapshot.Memory.UsedPercent:F1}% occupied; paging pressure not assessed"));
-        }
-
-        if (snapshot.Disk.Availability.IsSupported && snapshot.Disk.ActiveTimePercent >= 90)
-        {
-            AddEvent(new SessionEvent(snapshot.Timestamp, SessionEventType.DiskActivity, $"Disk active {snapshot.Disk.ActiveTimePercent:F1}%"));
+            if (value is null) return null;
+            if (_strings.TryGetValue(value, out var shared)) return shared;
+            _strings[value] = value;
+            return value;
         }
     }
+
+    // Callers hold _gate. Threshold conditions are logged once when they start and once when they end, never on every sample.
+    private void AddAutomaticEvents(SystemMetricsSnapshot snapshot)
+    {
+        var previous = _previous;
+        _previous = snapshot;
+        var gap = previous is null || (snapshot.Timestamp - previous.Timestamp).TotalSeconds > 6;
+        Condition(SessionEventType.CpuSaturation, snapshot.Cpu.Availability.IsSupported && snapshot.Cpu.UtilizationPercent >= 90,
+            "CPU above 90%", $"CPU {snapshot.Cpu.UtilizationPercent:F1}%");
+        Condition(SessionEventType.MemoryPressure, snapshot.Memory.Availability.IsSupported && snapshot.Memory.UsedPercent >= 90 && snapshot.Memory.AvailableBytes <= 1024UL * 1024 * 1024,
+            "Low available memory", $"{snapshot.Memory.UsedPercent:F1}% occupied; paging pressure not assessed");
+        Condition(SessionEventType.DiskActivity, snapshot.Disk.Availability.IsSupported && snapshot.Disk.ActiveTimePercent >= 90,
+            "Disk active above 90%", $"Disk active {snapshot.Disk.ActiveTimePercent:F1}%");
+        if (previous is null) return;
+
+        var seconds = (snapshot.Timestamp - previous.Timestamp).TotalSeconds;
+        // An empty process list means the sample failed to read processes, not that every process exited.
+        if (previous.Processes.Count > 0 && snapshot.Processes.Count > 0)
+        {
+            var before = previous.Processes.DistinctBy(ProcessKey).ToDictionary(ProcessKey);
+            var now = snapshot.Processes.DistinctBy(ProcessKey).ToDictionary(ProcessKey);
+            foreach (var process in now.Where(item => !before.ContainsKey(item.Key)).Select(item => item.Value))
+                AddEvent(new SessionEvent(snapshot.Timestamp, SessionEventType.ProcessLaunch,
+                    $"{process.Name} (PID {process.ProcessId}) started{(process.HasVisibleWindow ? " · has a window" : string.Empty)}")
+                    { ProcessName = process.Name, ProcessId = process.ProcessId, HadWindow = process.HasVisibleWindow });
+            foreach (var process in before.Where(item => !now.ContainsKey(item.Key)).Select(item => item.Value))
+                AddEvent(new SessionEvent(snapshot.Timestamp, SessionEventType.ProcessExit,
+                    $"{process.Name} (PID {process.ProcessId}) exited · last seen {seconds:F0} s earlier{(process.HasVisibleWindow ? " · had a window" : string.Empty)}"
+                    + (process.TotalCpuTime is { } cpu ? $" · CPU time {(int)cpu.TotalHours:00}:{cpu.Minutes:00}:{cpu.Seconds:00}" : string.Empty))
+                    { ProcessName = process.Name, ProcessId = process.ProcessId, HadWindow = process.HasVisibleWindow });
+        }
+        if (previous.Power.Source != snapshot.Power.Source && previous.Power.Source != PowerSource.Unknown && snapshot.Power.Source != PowerSource.Unknown)
+            AddEvent(new SessionEvent(snapshot.Timestamp, SessionEventType.PowerSourceChanged, $"Power source changed from {previous.Power.Source} to {snapshot.Power.Source}"));
+        if (previous.Network.Availability.IsSupported && snapshot.Network.Availability.IsSupported)
+        {
+            var before = previous.Network.Interfaces.DistinctBy(item => item.Id).ToDictionary(item => item.Id, StringComparer.OrdinalIgnoreCase);
+            var now = snapshot.Network.Interfaces.DistinctBy(item => item.Id).ToDictionary(item => item.Id, StringComparer.OrdinalIgnoreCase);
+            foreach (var adapter in now.Values.Where(item => !before.ContainsKey(item.Id)))
+                AddEvent(new SessionEvent(snapshot.Timestamp, SessionEventType.NetworkChanged, $"Network adapter became active: {adapter.Name} ({adapter.Kind})"));
+            foreach (var adapter in before.Values.Where(item => !now.ContainsKey(item.Id)))
+                AddEvent(new SessionEvent(snapshot.Timestamp, SessionEventType.NetworkChanged, $"Network adapter no longer active: {adapter.Name} ({adapter.Kind})"));
+        }
+
+        void Condition(SessionEventType type, bool active, string label, string detail)
+        {
+            if (_activeConditions.TryGetValue(type, out var since) && (gap || !active))
+            {
+                var endedAt = gap && previous is not null ? previous.Timestamp : snapshot.Timestamp;
+                AddEvent(new SessionEvent(endedAt, type, $"{label} ended after {Math.Max(0, (endedAt - since).TotalSeconds):F0} s{(gap ? " (samples interrupted)" : string.Empty)}"));
+                _activeConditions.Remove(type);
+            }
+            if (active && !_activeConditions.ContainsKey(type))
+            {
+                _activeConditions[type] = snapshot.Timestamp;
+                AddEvent(new SessionEvent(snapshot.Timestamp, type, $"{label} · {detail}"));
+            }
+        }
+    }
+
+    private static string ProcessKey(ProcessMetric process)
+        => $"{process.ProcessId}|{process.StartTime?.UtcTicks ?? 0}|{process.Name}";
 
     // Journals left behind by a recording that never reached Stop (app crash, freeze, power loss, forced restart).
     public static IReadOnlyList<string> FindInterruptedJournals(string directory)
         => Directory.Exists(directory) ? Directory.EnumerateFiles(directory, "*" + SessionJournal.Extension).Where(path => path.EndsWith(".perfsession" + SessionJournal.Extension, StringComparison.OrdinalIgnoreCase)).ToArray() : [];
 
-    // Rebuilds a .perfsession from a journal and removes the journal. Returns null if the journal is empty or still in use.
+    // Rebuilds a .perfsession from a journal and removes the journal.
     // Returns null when nothing new was recovered: the journal is in use, holds nothing usable (it is then removed), or the
     // session file next to it is already at least as complete (a Stop whose journal cleanup failed, or a checkpoint).
-    public static async Task<string?> RecoverAsync(string journalPath, CancellationToken cancellationToken = default)
+    public static async Task<string?> RecoverAsync(string journalPath, SessionEvidenceSource? evidence = null, CancellationToken cancellationToken = default)
     {
         var (document, inUse) = await SessionJournal.ReadAsync(journalPath, JsonOptions, cancellationToken).ConfigureAwait(false);
         if (inUse) return null;
@@ -271,9 +445,13 @@ public sealed class FlightRecorder : IDisposable
                 var existing = await LoadAsync(target, cancellationToken).ConfigureAwait(false);
                 if (existing.Samples.Count >= document.Samples.Count) document = null;
             }
-            catch (Exception ex) when (ex is IOException or InvalidDataException or JsonException) { }
+            catch (Exception ex) when (ex is IOException or InvalidDataException or InvalidOperationException or JsonException) { }
         }
-        if (document is not null) await SaveAtomicAsync(document, target, cancellationToken).ConfigureAwait(false);
+        if (document is not null)
+        {
+            document = document with { WindowsEvidence = await CollectAsync(evidence, document.Metadata, cancellationToken).ConfigureAwait(false) };
+            await SaveAtomicAsync(document, target, cancellationToken).ConfigureAwait(false);
+        }
         await SessionJournal.TryDeleteAsync(journalPath).ConfigureAwait(false);
         return document is null ? null : target;
     }

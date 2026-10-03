@@ -29,18 +29,30 @@ public sealed partial class PowerDashboard : UserControl
         if (_history.Samples.Count == 0) return;
         var snapshot = _history.Samples[^1];
         var sensors = SensorCatalog.GetSensors(snapshot);
-        var cpuPower = sensors.FirstOrDefault(sensor => sensor.Scope == "CPU package" && sensor.Kind == "Power");
+        SensorMetric? Measured(string scope) => sensors.Where(sensor => sensor.Scope == scope && sensor.Kind == "Power").OrderByDescending(sensor => sensor.Value.HasValue).FirstOrDefault();
+        var cpuPower = Measured("CPU package");
+        var corePower = Measured("CPU cores");
+        var integratedGraphicsPower = Measured("CPU integrated graphics");
+        var dramPower = Measured("DRAM");
+        var platformPower = Measured("Platform");
         var temperature = sensors.FirstOrDefault(sensor => sensor.Scope == "CPU sensor" && sensor.Kind == "Temperature");
-        var gpuPower = sensors.FirstOrDefault(sensor => sensor.Scope == "GPU board" && sensor.Value.HasValue);
+        var gpuPower = sensors.FirstOrDefault(sensor => sensor.Scope == "GPU board" && sensor.Kind == "Power" && sensor.Value.HasValue);
+        var gpuLimit = gpuPower is null ? null : sensors.FirstOrDefault(sensor => sensor.Scope == "GPU power limit" && sensor.Device == gpuPower.Device);
         var discharge = snapshot.Power.Source == PowerSource.Battery ? snapshot.Power.BatteryDischargeWatts : null;
         var available = new List<string>();
         var missing = new List<string>();
         if (discharge is { } batteryWatts) available.Add($"Battery discharge: {batteryWatts:F1} W");
         else missing.Add(snapshot.Power.Source == PowerSource.Battery ? "Battery discharge: no measured reading" : "Whole-system AC draw: no measured wall-power source");
         if (cpuPower?.Value is { } cpuWatts) available.Add($"CPU package: {cpuWatts:F1} W");
-        else missing.Add("CPU package power: no identified provider");
-        if (gpuPower?.Value is { } gpuWatts) available.Add($"GPU board: {gpuWatts:F1} W");
+        else missing.Add("CPU package power: no Windows Energy Meter or hardware-sensor provider");
+        if (corePower?.Value is { } coreWatts) available.Add($"CPU cores: {coreWatts:F1} W");
+        if (integratedGraphicsPower?.Value is { } igpuWatts) available.Add($"Integrated graphics: {igpuWatts:F1} W");
+        if (dramPower?.Value is { } dramWatts) available.Add($"DRAM: {dramWatts:F1} W");
+        if (platformPower?.Value is { } platformWatts) available.Add($"Platform (PSys): {platformWatts:F1} W");
+        if (gpuPower?.Value is { } gpuWatts) available.Add($"GPU board: {gpuWatts:F1} W" + (gpuLimit?.Value is { } limitWatts ? $" of {limitWatts:F0} W limit" : string.Empty));
         else missing.Add("GPU board power: no measured reading");
+        foreach (var meter in sensors.Where(sensor => sensor.Id.StartsWith("windows/power-meter/", StringComparison.Ordinal) && sensor.Kind == "Power" && sensor.Value.HasValue))
+            available.Add($"Power meter {meter.Device} (unidentified domain): {meter.Value:F1} W");
         if (snapshot.Power.DisplayBrightnessPercent is { } brightness) available.Add($"Display brightness: {brightness}%");
         else missing.Add("Display brightness: unavailable");
         var zoneLimits = sensors.Where(sensor => sensor.Id.EndsWith("/passive-limit", StringComparison.Ordinal)).ToArray();
@@ -49,15 +61,29 @@ public sealed partial class PowerDashboard : UserControl
         if (limiting.Length > 0) available.Add("Platform thermal limit: ACTIVE (" + string.Join(", ", limiting.Select(sensor => $"{sensor.Device} {sensor.Name} {sensor.Value:F0}{(sensor.Unit == "%" ? "%" : string.Empty)}")) + ")");
         else if (zoneLimits.Any(sensor => sensor.Value.HasValue)) available.Add("Platform thermal limit: none reported");
         else missing.Add("Thermal limiting: no platform thermal zone reports a limit");
-        missing.Add("CPU power limiting (PL1/PL2): no verified state available");
+        var cpuLimit = sensors.FirstOrDefault(sensor => sensor.Id == "windows/cpu/performance-limit");
+        var cpuLimitFlags = sensors.FirstOrDefault(sensor => sensor.Id == "windows/cpu/performance-limit-flags");
+        if (cpuLimit?.Value is < 100 || cpuLimitFlags?.Value is > 0)
+            available.Add($"CPU performance limit: ACTIVE ({Format(cpuLimit?.Value, "%")} of maximum frequency, flags {Format(cpuLimitFlags?.Value, "bitmask")})");
+        else if (cpuLimit?.Value is not null) available.Add("CPU performance limit: none reported");
+        else missing.Add("CPU performance limit: Windows does not report one");
+        missing.Add("CPU power limit values (PL1/PL2): not exposed by Windows");
+        foreach (var reasons in sensors.Where(sensor => sensor.Scope == "GPU clock limit" && sensor.Value.HasValue))
+        {
+            var caps = SensorCatalog.DescribeGpuCapReasons(reasons.Value);
+            available.Add(caps.Count > 0 ? $"GPU clock limit: ACTIVE ({string.Join(", ", caps)}) · {reasons.Device}" : $"GPU clock limit: no power or thermal cap · {reasons.Device}");
+        }
         SystemPowerText.Text = available.Count > 0 ? string.Join("  ·  ", available) : "No measured power readings are available on this machine.";
         MissingSourcesText.Text = string.Join("\n", missing);
         var active = snapshot.Processes.Where(process => process.CpuAvailable && process.CpuPercent > 0 || process.GpuPercent is > 0)
             .OrderByDescending(process => (process.CpuAvailable ? process.CpuPercent : 0) + process.GpuPercent.GetValueOrDefault()).FirstOrDefault();
         ActivityText.Text = active is null ? "Top process activity: Unavailable" : $"Top process activity: {active.Name} (PID {active.ProcessId}) · CPU {active.CpuPercent:F1}% · busiest GPU engine {(active.GpuPercent is { } gpu ? $"{gpu:F1}%" : "Unavailable")}";
         var headlines = new List<(string Name, string Value, string Detail)>();
-        if (gpuPower?.Value is not null) headlines.Add(("GPU board power", Format(gpuPower.Value, "W"), gpuPower.Device));
+        if (gpuPower?.Value is not null) headlines.Add(("GPU board power", Format(gpuPower.Value, "W"), gpuLimit?.Value is { } boardLimit ? $"{gpuPower.Device} · limit {boardLimit:F0} W" : gpuPower.Device));
         if (cpuPower?.Value is not null) headlines.Add(("CPU package", Format(cpuPower.Value, "W"), $"{cpuPower.Device} · {cpuPower.Source}"));
+        if (corePower?.Value is not null) headlines.Add(("CPU cores", Format(corePower.Value, "W"), "Part of package power"));
+        if (integratedGraphicsPower?.Value is not null) headlines.Add(("Integrated graphics", Format(integratedGraphicsPower.Value, "W"), "Part of package power"));
+        if (dramPower?.Value is not null) headlines.Add(("DRAM power", Format(dramPower.Value, "W"), dramPower.Source));
         if (temperature?.Value is not null) headlines.Add(("CPU temperature", Format(temperature.Value, "°C"), temperature.Name));
         if (snapshot.Cpu.EffectiveMegahertz is > 0) headlines.Add(("Effective clock (estimate)", Format(snapshot.Cpu.EffectiveMegahertz / 1000, "GHz"), "Base frequency × % Processor Performance"));
         if (snapshot.Cpu.ReportedMegahertz is > 0) headlines.Add(("OS reported clock", Format(snapshot.Cpu.ReportedMegahertz / 1000, "GHz"), "Core average · often a nominal firmware value"));
@@ -111,7 +137,7 @@ public sealed partial class PowerDashboard : UserControl
         var max = Math.Max(10, power.Select(sample => sample.Value.GetValueOrDefault()).DefaultIfEmpty().Max() * 1.15);
         var hasPower = power.Any(sample => sample.Value.HasValue);
         PowerChart.SetTimedSeries(power, end, max, Color.FromArgb(255, 237, 180, 101));
-        PowerScaleText.Text = hasPower ? "Axis range is based on observed samples, not rated capacity." : "No samples for this sensor. CPU package readings require an identified hardware provider.";
+        PowerScaleText.Text = hasPower ? "Axis range is based on observed samples, not rated capacity." : "No samples for this sensor. CPU package readings require Windows Energy Meter counters or an identified hardware provider.";
     }
 
     private void PowerSensorPicker_SelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -120,7 +146,14 @@ public sealed partial class PowerDashboard : UserControl
         _selectedPower = choice.Id;
         RenderCharts();
     }
-    private static string Format(double? value, string unit) => value is { } number ? $"{number:F1} {unit}" : "Unavailable";
+    private static string Format(double? value, string unit) => value switch
+    {
+        null => "Unavailable",
+        { } number when unit == "bitmask" => $"0x{(ulong)Math.Max(0, number):X}",
+        { } number when unit == "P-state" => $"P{number:F0}",
+        { } number when unit == "%" => $"{number:F1}%",
+        { } number => $"{number:F1} {unit}"
+    };
     private sealed class Headline(string name) : INotifyPropertyChanged
     {
         public string Name { get; } = name;

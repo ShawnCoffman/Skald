@@ -47,6 +47,16 @@ public sealed class WindowDiagnosticAnalyzer
                 s => s.Sensors.Any(sensor => sensor.Device.Equals(zone, StringComparison.OrdinalIgnoreCase)
                     && ((sensor.Id.EndsWith("/passive-limit", StringComparison.Ordinal) && sensor.Value is < 100)
                         || (sensor.Id.EndsWith("/throttle-reasons", StringComparison.Ordinal) && sensor.Value is > 0))));
+        Add("CPU performance limit", "Windows reported that firmware was capping processor frequency (performance limit below 100% or a limit flag set). Power, current or thermal limits can cause this; compare with CPU package power and temperature.",
+            s => s.Sensors.Any(sensor => (sensor.Id == "windows/cpu/performance-limit" && sensor.Value is < 100)
+                || (sensor.Id == "windows/cpu/performance-limit-flags" && sensor.Value is > 0)));
+        foreach (var gpu in ordered.SelectMany(s => s.GpuDevices).Where(device => device.ClockLimitReasons.HasValue).Select(device => device.Name).Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            Add($"GPU thermal or hardware slowdown · {gpu}", "The NVIDIA driver reported thermal, hardware slowdown or power-brake limiting of GPU clocks. This points at cooling, the board or its power delivery rather than the workload; compare with GPU temperature and board power.",
+                s => s.GpuDevices.Any(device => device.Name.Equals(gpu, StringComparison.OrdinalIgnoreCase) && (device.ClockLimitReasons & SensorCatalog.GpuThermalOrHardwareReasons) is > 0));
+            Add($"GPU power cap · {gpu}", "The NVIDIA driver held GPU clocks at the board's enforced power limit. This is expected under sustained full load; it matters when the limit is lower than the board's rating.",
+                s => s.GpuDevices.Any(device => device.Name.Equals(gpu, StringComparison.OrdinalIgnoreCase) && (device.ClockLimitReasons & SensorCatalog.GpuPowerCapReason) is > 0));
+        }
         return findings;
 
         void Add(string title, string explanation, Func<SystemMetricsSnapshot, bool> matches, double minimumSeconds = 30)

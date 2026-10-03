@@ -40,9 +40,26 @@ Each check is **Found**, **Nothing found**, **Could not check**, or **Not applic
 
 The scan keeps a driver, BIOS and OS-build snapshot at `%LOCALAPPDATA%\Skald\driver-snapshot.json` and compares the next scan against it. Use `--save-baseline` / `--baseline` to compare against a known-good snapshot instead.
 
+### Recording
+
+One **Record** button in the toolbar, available from every page. Its menu holds:
+
+- **Include deep trace.** Also runs Windows Performance Recorder (WPR) in memory mode. Each **Mark Problem** saves the last minute or so of system activity as an ETL beside the recording (`<recording>.marker1.etl`, …), then a fresh buffer starts; Stop saves `<recording>.end.etl`. Requires Skald running as administrator: the item is disabled with the reason otherwise, and **Restart Skald as administrator** is offered. The choice is remembered. A trace left running by an app that closed or crashed is saved as `*.leftover.etl` on the next elevated launch.
+- **Record power for 30 minutes** and **Open recordings folder**.
+
+Mark Problem without a running recording starts one with the five minutes of pre-roll and saves it automatically two minutes after the last marker. Every recording stops and saves at two hours, because samples are held in memory until Stop (about 110 MB per hour).
+
+Each recording saves, from the recorded machine:
+
+- **Machine identity and drivers:** make/model, processor, graphics, memory, BIOS, Windows build and the full driver list.
+- **Windows reports for the recording's own time window:** crashes, hangs, WHEA, driver/storage and restart reports, plus dump files written during it. Replay and the HTML report use these, so a recording opened on another PC never shows the viewer's events. Recordings from earlier versions without them fall back to the local logs only when opened on the PC that made them.
+- **Events:** problem markers, CPU/memory/disk threshold conditions (logged once when they start and once when they end), process starts and exits (with name, PID and whether the program had a window), power-source and network-adapter changes, and saved deep traces. Replay pairs a program exit with any Windows crash or hang report for it within 30 seconds.
+
+Recordings are Brotli-compressed JSON (`.perfsession`), about 3–4 KB per two-second sample, roughly 7× smaller than the gzip format of earlier versions, which still loads. When Documents is synced by OneDrive, recordings are kept in `%LOCALAPPDATA%\Skald\Sessions` instead of `Documents\Skald Sessions` so process paths and user names are not uploaded as they are written. ZIP exports can remove computer, user, domain and profile names, SIDs and device serials; deep traces cannot be scrubbed and are never included in a ZIP with names removed. The HTML report uses the hardware check's layout and Found / Nothing found / Could not check wording, per marker.
+
 ### Recording survives crashes
 
-While recording, each sample is also appended to a journal next to the session file (`*.perfsession.journal`). If the app, Windows or the power dies mid-recording, the next launch rebuilds the session from the journal and says so ("Recovered 1 interrupted recording"). A clean Stop removes the journal.
+While recording, each sample is also appended to a journal next to the session file (`*.perfsession.journal`), flushed after every entry. If the app, Windows or the power dies mid-recording, the next launch rebuilds the session from the journal, reads the Windows reports through to the following boot (so the unclean-shutdown or bugcheck report is included), and says so ("Recovered 1 interrupted recording"). A clean Stop removes the journal.
 
 ### Layout of the code
 
@@ -98,7 +115,7 @@ dotnet build .\Skald.sln -c Debug -p:Platform=x64
 dotnet test .\Skald.sln -c Debug -p:Platform=x64
 ```
 
-The app is currently configured as an unpackaged WinUI 3 application and requests no administrator privileges. The executable is `Skald.exe`, and new recordings are saved under `Documents\Skald Sessions`. The Recordings page also discovers earlier `.perfsession` files in other `Documents\* Sessions` folders.
+The app is currently configured as an unpackaged WinUI 3 application and requests no administrator privileges; deep trace offers a restart as administrator. The executable is `Skald.exe`, and new recordings are saved under `Documents\Skald Sessions`, or `%LOCALAPPDATA%\Skald\Sessions` when Documents is synced by OneDrive. The Recordings page lists both.
 
 ## Planned next milestones
 
@@ -114,25 +131,29 @@ The app is currently configured as an unpackaged WinUI 3 application and request
 - Power & Thermals combines synchronized utilization, reported clock, and selectable power histories with per-sensor current/minimum/average/maximum statistics. Battery details appear only when a battery is present.
 - Processes has General, CPU, Memory, GPU, and I/O column presets. Name and PID remain pinned; the metric header scrollbar moves the numeric columns.
 - The Processes table redraws every five seconds while visible, and filters/sorts redraw immediately. The underlying telemetry and recording cadence remains two seconds, so this change reduces row rebuilding rather than the cost of collecting process data.
-- Recordings combines start/stop, problem markers, saved sessions, event navigation, and historical activity/power charts. New sensor fields are saved in portable sessions. Old recordings load with missing fields unavailable; legacy generic power readings are explicitly unverified.
+- Recordings combines saved sessions, event navigation, and historical activity/power charts, including CPU package and GPU board power with per-domain average, peak and energy for the run. New sensor fields are saved in portable sessions. Old recordings load with missing fields unavailable; legacy generic power readings are explicitly unverified.
 - Recordings can ZIP selected sessions or all saved sessions into `Documents\Skald Exports`, and can permanently delete selected sessions after confirmation. The current active recording is excluded from these actions until stopped.
 - The Power & Thermals dashboard updates its bound headline and sensor rows in place so live telemetry does not rebuild the list while the user scrolls.
 - Analyze Performance examines the last 60 seconds of collected history. A qualifying condition must span at least 30 seconds; unavailable samples or gaps over six seconds break a run. Rules include total CPU, individual logical processors, low available memory, and disk activity. They do not infer thermal limits or paging pressure.
-- Mark Problem now starts a recording if needed, includes up to five minutes of buffered samples, and immediately checkpoints a replayable session file. The recording continues for post-marker context until Stop. Starting a normal recording also includes the same pre-roll.
+- Mark Problem now starts a recording if needed, includes up to five minutes of buffered samples, and immediately checkpoints a replayable session file. A recording started this way saves itself two minutes after the last marker. Starting a normal recording also includes the same pre-roll.
 - Recordings has an incident review centered on each user marker. It aligns sampled threshold transitions, nearby top processes, retained Windows reports, and dump candidates by timestamp. The review distinguishes timing correlation from cause and shows sampling gaps.
 - Analyze Performance also inspects processor queue and DPC time, commit with hard-page reads, per-physical-disk read/write latency, TCP retransmissions, and interface errors or discards when those counters are available. These are screening observations, not root-cause determinations.
-- The Recordings page can start and save an optional WPR General-profile memory trace. Mark Problem also places a WPR marker while that trace is running. The saved ETL is intended for Windows Performance Analyzer; starting a trace may require Windows permissions and can affect system performance.
+- Deep trace (WPR General profile, light, memory mode) is an option on the Record button rather than a separate control. Mark Problem places a WPR marker and saves the buffer; ETLs are saved with `-compress -skipPdbGen`, so they are one file each and quick to save, and kernel and driver stacks still resolve from symbol servers. Tracing needs administrator rights and can affect system performance.
 - Reliability & Events surfaces structured WHEA/bugcheck fields when exposed, recurrence by report signature, BIOS context, driver or device firmware versions only on an exact PnP identity match, nearby dump candidates, and a copyable WinDbg launch command. A nearby dump is only a candidate; WinDbg and symbols are separate tools.
 
 ### Sensor sources and limitations
 
 Windows `CallNtPowerInformation` supplies **OS-reported** processor MHz. This can be a nominal firmware value; it is not effective clock or a guarantee of boost frequency. Per-logical-processor load comes from Windows Processor Information counters.
 
-NVIDIA NVML supplies GPU board power, temperature, graphics clock, and memory clock when supported by the installed driver. GPU sensor identity uses NVML UUID where available. GPU board power is never labeled whole-system power or added to CPU package power.
+NVIDIA NVML supplies GPU board power, enforced power limit, clock limit reasons, performance state, fan speed, temperature, graphics clock, and memory clock when supported by the installed driver. GPU sensor identity uses NVML UUID where available. GPU board power is never labeled whole-system power or added to CPU package power.
 
-Skald can read already-running LibreHardwareMonitor/OpenHardwareMonitor WMI providers for power, temperature, and clock sensors. Only a CPU-parent `CPU Package` power sensor is attributed to CPU package power. Skald does not install or start a hardware-access driver. If neither provider is exposed, CPU package power and CPU temperature can remain unavailable. Provider sample age is not exposed by that interface and is labeled accordingly.
+CPU power comes first from the in-box Windows **Energy Meter** counters, which expose the processor's RAPL domains without any added driver: CPU package, CPU cores, integrated graphics, DRAM and (on some laptops) platform PSys. These are processor-modeled running averages, not wall measurements. Cores and integrated graphics are part of package power and are shown separately, never summed; the counter set's `_Total` instance is ignored for that reason. Domains whose cumulative energy is zero (not implemented by the processor) are hidden. The `Processor Information` *% Performance Limit* and *Performance Limit Flags* counters show when firmware is capping CPU frequency; Windows does not say which PL1/PL2 limit applies or expose the limit values.
 
-Optional Windows Power Meter instances are enumerated and displayed with their actual instance identity and **unidentified hardware domain**. Their watts are never assumed to be CPU package power. Effective CPU clock and thermal/power limiting indicators currently remain unavailable/unknown.
+Skald can also read already-running LibreHardwareMonitor/OpenHardwareMonitor WMI providers for power, temperature, and clock sensors. Only a CPU-parent `CPU Package` power sensor is attributed to CPU package power. Skald does not install or start a hardware-access driver. If neither the Energy Meter counters nor a provider is exposed, CPU package power and CPU temperature can remain unavailable. Provider sample age is not exposed by that interface and is labeled accordingly.
+
+Optional Windows Power Meter instances (and their power budget) are enumerated and displayed with their actual instance identity and **unidentified hardware domain**. They report milliwatts and are converted to watts. Their watts are never assumed to be CPU package power.
+
+Analyze Performance adds *CPU performance limit* (firmware capping CPU frequency), *GPU thermal or hardware slowdown* (NVML thermal, hardware slowdown or power-brake reasons) and *GPU power cap* (the board held at its enforced limit, which is normal under full load). The first two are handed off as platform leads; the power cap is not.
 
 History uses timestamps, retains a three-minute window, ignores duplicate timestamps, and leaves gaps for missing readings. Power charts do not substitute another device's readings for missing samples of the selected sensor. Statistics describe available samples in the selected window, not rated hardware limits.
 
@@ -157,7 +178,7 @@ The collector combines relevant retained Application/System events with Win32_Re
 
 The overview adds seven-day counts for Application Error 1000 crashes, Application Hang 1002 hangs, unexpected shutdowns, confirmed bugcheck reports, and WHEA hardware reports. Kernel-Power 41 and EventLog 6008 within ten minutes count as one unexpected shutdown; this does not imply a bugcheck or hardware cause. Counts may be partial if event sources are unavailable or the 5,000-record-per-log scan cap is reached. Reliability & Events lists existing `%SystemRoot%\MEMORY.DMP`, `%SystemRoot%\Minidump\*.dmp`, and current-user `CrashDumps` files separately from incidents. Its button can include other profiles' `CrashDumps` folders in a shallow, read-only scan; inaccessible locations remain partial.
 
-Windows updates shows the latest 50 Windows Update Agent history entries, including installations, removals, and failures. Its pending count comes from an offline search of the local update catalog; it can be stale until Windows checks online. The overview shows a compact update state and links to the history page. The collector does not initiate an online update search or install updates.
+Windows updates shows Windows Update Agent history by date range (last 1, 3, 7, 14 or 30 days, or all history; 14 days by default, the hardware check's update window), including installations, removals, failures and Defender definition updates. Repeats of the same update and outcome are one row with a count, the first and latest time, and the latest error code. History is read newest first until the range is covered, up to 2,000 entries; when the read limit or Windows' own retained history stops short of the range, the page says how far back it reaches. Drivers installed outside Windows Update and BIOS updates are not in this history; the hardware check's driver/BIOS comparison covers them. Its pending count comes from an offline search of the local update catalog; it can be stale until Windows checks online. The overview shows a compact update state and links to the history page. The collector does not initiate an online update search or install updates.
 
 ### Performance subtab diagnostics
 

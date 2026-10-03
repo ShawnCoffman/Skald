@@ -62,7 +62,8 @@ public sealed partial class SummaryPage : Page, ITelemetryPage
         {
             var reliabilityTask = WindowsReliabilityCollector.CollectAsync();
             var dumpsTask = CrashDumpCollector.CollectAsync();
-            var updatesTask = WindowsUpdateCollector.CollectAsync();
+            var updatesSince = DateTimeOffset.Now.AddDays(-7);
+            var updatesTask = WindowsUpdateCollector.CollectAsync(updatesSince);
             var reliability = await reliabilityTask;
             var dumps = await dumpsTask;
             var updates = await updatesTask;
@@ -70,8 +71,8 @@ public sealed partial class SummaryPage : Page, ITelemetryPage
             var summary = ReliabilitySummary.From(reliability, TimeSpan.FromDays(7));
             ReliabilitySummaryText.Text = $"{summary.AppCrashes} app crashes · {summary.AppHangs} hangs\n{summary.UnexpectedShutdowns} unexpected shutdowns · {summary.BugChecks} bug checks\n{summary.HardwareReports} hardware reports · {dumps.Files.Count} dump files available";
             LatestProblemText.Text = summary.LatestProblem is { } latest ? $"Latest: {latest.DisplayTime} · {latest.Component} · {latest.Summary}" : "No error or critical report in available history.";
-            var failed = updates.Entries.Count(item => item.Result is "Failed" or "Aborted" or "Succeeded with errors");
-            UpdateSummaryText.Text = $"Pending in local catalog: {updates.PendingCount?.ToString(System.Globalization.CultureInfo.CurrentCulture) ?? "Unknown"}\nFailed recent history entries: {failed}\nLast successful check: {updates.LastSuccessfulSearch?.ToString("g", System.Globalization.CultureInfo.CurrentCulture) ?? "Unknown"}";
+            var failed = updates.Entries.Count(item => item.Date >= updatesSince && item.IsFailure);
+            UpdateSummaryText.Text = $"Pending in local catalog: {updates.PendingCount?.ToString(System.Globalization.CultureInfo.CurrentCulture) ?? "Unknown"}\nFailed in the last 7 days: {failed}\nLast successful check: {updates.LastSuccessfulSearch?.ToString("g", System.Globalization.CultureInfo.CurrentCulture) ?? "Unknown"}";
             HealthStatusText.Text = $"Checked {DateTimeOffset.Now:t}" + (reliability.SourceStatus.Concat(dumps.SourceStatus).Concat(updates.SourceStatus).Any(status => status.Contains("unavailable", StringComparison.OrdinalIgnoreCase) || status.Contains("limit reached", StringComparison.OrdinalIgnoreCase)) ? " · Some sources partial" : " · Sources available");
             _healthChecked = DateTimeOffset.Now;
         }
