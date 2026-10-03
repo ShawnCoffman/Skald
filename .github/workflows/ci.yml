@@ -1,0 +1,35 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    name: Build and test
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Uses the SDK version pinned in global.json.
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      - name: Restore
+        run: dotnet restore Skald.sln
+
+      - name: Run unit tests
+        run: dotnet test tests/Skald.Core.Tests/Skald.Core.Tests.csproj -c Debug --no-restore --logger "trx;LogFileName=results.trx" --results-directory TestResults
+
+      # The test project does not reference the WinUI app, so build it separately to catch XAML and code-behind breaks.
+      - name: Build desktop app
+        run: dotnet build src/Skald.App/Skald.App.csproj -c Debug -p:Platform=x64 --no-restore
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: TestResults
