@@ -153,8 +153,10 @@ public sealed class FlightRecorderTests
             await SessionReportWriter.WriteHtmlAsync(document, htmlPath);
             var html = await File.ReadAllTextAsync(htmlPath);
 
-            Assert.Contains("Skald Session Report", html);
+            Assert.Contains("Skald recording report", html);
             Assert.Contains("Test", html);
+            // An old recording has no saved Windows reports; the report says so instead of implying nothing happened.
+            Assert.Contains("Not saved with this recording", html);
         }
         finally
         {
@@ -222,19 +224,53 @@ public sealed class FlightRecorderTests
             var now = DateTimeOffset.UtcNow;
             var recorder = new FlightRecorder();
             recorder.Start(path, 2);
-            for (var i = 0; i < 4; i++) recorder.Append(CreateSnapshot(now.AddSeconds(i * 2)));
+            var lengths = new List<long>();
+            for (var i = 0; i < 4; i++)
+            {
+                recorder.Append(CreateSnapshot(now.AddSeconds(i * 2)));
+                lengths.Add(await FlushedLengthAsync(journal, lengths.LastOrDefault()));
+            }
             recorder.Dispose();
-            // Each entry is its own gzip member; cut the file in the middle of the last one, as a power loss mid-write would.
+            // Every entry is flushed as it is written; cut the file just inside the last one, as a power loss mid-write would.
             var bytes = await File.ReadAllBytesAsync(journal);
-            var header = bytes[..4];
-            var lastMember = bytes.AsSpan().LastIndexOf(header);
-            Assert.True(lastMember > 0);
-            await File.WriteAllBytesAsync(journal, bytes[..(lastMember + (bytes.Length - lastMember) / 2)]);
+            await File.WriteAllBytesAsync(journal, bytes[..(int)(lengths[2] + 1)]);
 
             Assert.Equal(path, await FlightRecorder.RecoverAsync(journal));
             var document = await FlightRecorder.LoadAsync(path);
             Assert.Equal(3, document.Samples.Count);
             Assert.Equal(now, document.Samples[0].Timestamp);
+        }
+        finally { File.Delete(path); File.Delete(journal); }
+    }
+
+    [Fact]
+    public async Task CorruptJournalTailStillRecoversTheSamplesBeforeIt()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"skald-{Guid.NewGuid():N}.perfsession");
+        var journal = path + ".journal";
+        try
+        {
+            var now = DateTimeOffset.UtcNow;
+            var recorder = new FlightRecorder();
+            recorder.Start(path, 2);
+            var lengths = new List<long>();
+            for (var i = 0; i < 4; i++)
+            {
+                recorder.Append(CreateSnapshot(now.AddSeconds(i * 2)));
+                lengths.Add(await FlushedLengthAsync(journal, lengths.LastOrDefault()));
+            }
+            recorder.Dispose();
+            // A torn write at power loss can leave stale bytes after the last good entry, not just a short file. Brotli reports
+            // that as invalid data; recovery must keep what decoded before it rather than fail (and be retried on every launch).
+            var bytes = await File.ReadAllBytesAsync(journal);
+            await File.WriteAllBytesAsync(journal, bytes[..(int)lengths[2]].Concat(Enumerable.Repeat((byte)0xFF, 64)).ToArray());
+
+            Assert.Equal(path, await FlightRecorder.RecoverAsync(journal));
+            var document = await FlightRecorder.LoadAsync(path);
+            // The entry whose compressed bytes share a decoder slice with the corruption may be lost; everything before it is kept.
+            Assert.InRange(document.Samples.Count, 2, 3);
+            Assert.Equal(now, document.Samples[0].Timestamp);
+            Assert.False(File.Exists(journal));
         }
         finally { File.Delete(path); File.Delete(journal); }
     }
@@ -300,6 +336,18 @@ public sealed class FlightRecorderTests
             Assert.False(File.Exists(journal));
         }
         finally { File.Delete(path); File.Delete(journal); }
+    }
+
+    // The journal is written by a background task; wait until the file grows past the previous entry.
+    private static async Task<long> FlushedLengthAsync(string path, long previous)
+    {
+        for (var attempt = 0; attempt < 200; attempt++)
+        {
+            var length = new FileInfo(path).Length;
+            if (length > previous) return length;
+            await Task.Delay(10);
+        }
+        throw new TimeoutException("The journal was not flushed.");
     }
 
     private static SystemMetricsSnapshot CreateSnapshot(DateTimeOffset timestamp) => new(

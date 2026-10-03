@@ -10,7 +10,7 @@ public static class Handoff
 {
     // Live findings that describe a device, driver, platform or network path rather than an application's workload.
     private static readonly string[] PlatformFindings =
-        ["Platform thermal limit", "High read latency", "High write latency", "Elevated DPC time", "Interface errors", "Sustained TCP retransmissions"];
+        ["Platform thermal limit", "CPU performance limit", "GPU thermal or hardware slowdown", "High read latency", "High write latency", "Elevated DPC time", "Interface errors", "Sustained TCP retransmissions"];
 
     public static bool IsPlatformFinding(string title) => PlatformFindings.Any(prefix => title.StartsWith(prefix, StringComparison.OrdinalIgnoreCase));
 

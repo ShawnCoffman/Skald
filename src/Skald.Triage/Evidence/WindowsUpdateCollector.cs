@@ -4,9 +4,15 @@ namespace Skald.Triage;
 
 public static class WindowsUpdateCollector
 {
-    public static Task<WindowsUpdateHistory> CollectAsync(int maxEntries = 50) => Task.Run(() => Collect(maxEntries));
+    // Defender definition updates arrive several times a day, so a 30-day window can hold hundreds of entries.
+    public const int ReadLimit = 2000;
+    private const int PageSize = 100;
 
-    private static WindowsUpdateHistory Collect(int maxEntries)
+    // Reads history newest first until an entry older than since (null: all of it), the start of history, or ReadLimit.
+    public static Task<WindowsUpdateHistory> CollectAsync(DateTimeOffset? since = null, int maxEntries = ReadLimit)
+        => Task.Run(() => Collect(since, maxEntries));
+
+    private static WindowsUpdateHistory Collect(DateTimeOffset? since, int maxEntries)
     {
         var entries = new List<WindowsUpdateEntry>();
         var status = new List<string>();
@@ -20,10 +26,14 @@ public static class WindowsUpdateCollector
             dynamic session = Activator.CreateInstance(sessionType)!;
             dynamic searcher = session.CreateUpdateSearcher();
             total = (int)searcher.GetTotalHistoryCount();
-            if (total > 0)
+            var limit = Math.Min(maxEntries, total.Value);
+            // A whole page is kept even past the cutoff, so the oldest entry read shows the requested range was covered.
+            for (var start = 0; start < limit && (since is null || entries.Count == 0 || entries[^1].Date >= since); start += PageSize)
             {
-                dynamic history = searcher.QueryHistory(0, Math.Min(maxEntries, total.Value));
-                for (var i = 0; i < (int)history.Count; i++)
+                dynamic history = searcher.QueryHistory(start, Math.Min(PageSize, limit - start));
+                var count = (int)history.Count;
+                if (count == 0) break;
+                for (var i = 0; i < count; i++)
                 {
                     dynamic entry = history.Item(i);
                     var operation = (int)entry.Operation switch { 1 => "Install", 2 => "Uninstall", _ => "Other" };
@@ -31,6 +41,7 @@ public static class WindowsUpdateCollector
                     entries.Add(new(DateTime.SpecifyKind((DateTime)entry.Date, DateTimeKind.Utc), (string)entry.Title, operation, result, $"0x{(uint)(int)entry.HResult:X8}"));
                 }
             }
+            if (entries.Count >= maxEntries && entries.Count < total) status.Add($"Windows Update history: read limit of {maxEntries} entries reached");
             try
             {
                 searcher.Online = false;
@@ -56,6 +67,8 @@ public static class WindowsUpdateCollector
         }
         catch (Exception ex) when (ex is System.Runtime.InteropServices.COMException or InvalidOperationException)
         { status.Add($"Last update check: unavailable ({ex.GetType().Name})"); }
-        return new(DateTimeOffset.Now, entries.OrderByDescending(item => item.Date).ToArray(), pending, lastSearch, status) { TotalHistoryCount = total };
+        var readLimit = entries.Count >= maxEntries && total > entries.Count && (since is null || entries.Min(item => item.Date) > since);
+        return new(DateTimeOffset.Now, entries.OrderByDescending(item => item.Date).ToArray(), pending, lastSearch, status)
+            { TotalHistoryCount = total, RequestedSince = since, ReachedReadLimit = readLimit };
     }
 }

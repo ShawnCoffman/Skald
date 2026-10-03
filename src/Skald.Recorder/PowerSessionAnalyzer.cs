@@ -4,6 +4,10 @@ namespace Skald.Recorder;
 
 public sealed record ProcessActivity(string Name, double AverageCpuPercent, double AverageGpuPercent);
 
+// Time-weighted power for one measured domain (a CPU package or a GPU board). Domains are reported separately and never summed.
+public sealed record DomainPowerSummary(string SensorId, string Label, string Scope, double AverageWatts, double PeakWatts, double EnergyWh,
+    TimeSpan Covered, double CoveragePercent);
+
 public sealed record PowerSessionSummary(TimeSpan Duration, TimeSpan BatteryDuration, int BatterySamples, double? AverageDischargeWatts,
     double? PeakDischargeWatts, double? FullChargeWh, double? RemainingWh, double? BatteryHealthPercent,
     double? AverageCpuPercent, double? AverageGpuEnginePercent, double? AverageDiskActivePercent,
@@ -11,6 +15,7 @@ public sealed record PowerSessionSummary(TimeSpan Duration, TimeSpan BatteryDura
     IReadOnlyList<ProcessActivity> Processes)
 {
     public double? EstimatedBatteryEnergyWh { get; init; }
+    public IReadOnlyList<DomainPowerSummary> Domains { get; init; } = [];
     public double RunCoveragePercent => Duration > TimeSpan.Zero
         ? Math.Clamp(BatteryDuration.TotalSeconds / Duration.TotalSeconds * 100d, 0, 100) : 0;
 
@@ -24,7 +29,7 @@ public sealed record PowerSessionSummary(TimeSpan Duration, TimeSpan BatteryDura
         var samples = document.Samples.OrderBy(sample => sample.Timestamp).ToArray();
         var duration = samples.Length > 1 ? samples[^1].Timestamp - samples[0].Timestamp : TimeSpan.Zero;
         var batterySamples = samples.Where(sample => sample.Power.Source == PowerSource.Battery && sample.Power.BatteryDischargeWatts is > 0).ToArray();
-        var (batteryDuration, energyWh) = IntegrateBatteryDraw(samples);
+        var (batteryDuration, energyWh) = Integrate(samples, index => samples[index].Power.Source == PowerSource.Battery && samples[index].Power.BatteryDischargeWatts is > 0 ? samples[index].Power.BatteryDischargeWatts : null);
         var analyzed = batterySamples.Length > 0 ? batterySamples : samples;
         var discharge = batterySamples.Select(sample => sample.Power.BatteryDischargeWatts!.Value).ToArray();
         var battery = analyzed.LastOrDefault(sample => sample.Power.BatteryFullChargeCapacityWh is > 0);
@@ -46,10 +51,28 @@ public sealed record PowerSessionSummary(TimeSpan Duration, TimeSpan BatteryDura
             Average(analyzed.Where(sample => sample.Disk.Availability.IsSupported).Select(sample => sample.Disk.ActiveTimePercent)),
             Average(analyzed.Where(sample => sample.Network.Availability.IsSupported).Select(sample => (sample.Network.ReceiveBytesPerSecond + sample.Network.SendBytesPerSecond) / 1048576d)),
             Average(analyzed.Where(sample => sample.Power.DisplayBrightnessPercent.HasValue).Select(sample => (double)sample.Power.DisplayBrightnessPercent!.Value)),
-            processActivity) { EstimatedBatteryEnergyWh = batteryDuration > TimeSpan.Zero ? energyWh : null };
+            processActivity) { EstimatedBatteryEnergyWh = batteryDuration > TimeSpan.Zero ? energyWh : null, Domains = MeasuredDomains(samples, duration) };
     }
 
-    private static (TimeSpan Covered, double EnergyWh) IntegrateBatteryDraw(SystemMetricsSnapshot[] samples)
+    private static DomainPowerSummary[] MeasuredDomains(SystemMetricsSnapshot[] samples, TimeSpan duration)
+    {
+        var readings = samples.Select(sample => (sample, sensors: SensorCatalog.GetSensors(sample)
+            .Where(sensor => sensor.Kind == "Power" && sensor.Scope is "CPU package" or "GPU board").ToDictionary(sensor => sensor.Id))).ToArray();
+        return readings.SelectMany(item => item.sensors.Values).DistinctBy(sensor => sensor.Id)
+            .Select(sensor =>
+            {
+                var values = readings.Select(item => item.sensors.TryGetValue(sensor.Id, out var reading) ? reading.Value : null).ToArray();
+                var (covered, energy) = Integrate(samples, index => values[index]);
+                if (covered <= TimeSpan.Zero) return null;
+                return new DomainPowerSummary(sensor.Id, $"{sensor.Device} · {sensor.Name}", sensor.Scope, energy / covered.TotalHours,
+                    values.Where(value => value.HasValue).Max()!.Value, energy, covered,
+                    duration > TimeSpan.Zero ? Math.Clamp(covered.TotalSeconds / duration.TotalSeconds * 100, 0, 100) : 0);
+            })
+            .OfType<DomainPowerSummary>().OrderBy(item => item.Scope, StringComparer.Ordinal).ThenBy(item => item.Label, StringComparer.Ordinal).ToArray();
+    }
+
+    // Trapezoidal energy across adjacent valid readings. Gaps longer than 2.5 sampling intervals (10–120 s) do not count.
+    private static (TimeSpan Covered, double EnergyWh) Integrate(SystemMetricsSnapshot[] samples, Func<int, double?> watts)
     {
         if (samples.Length < 2) return (TimeSpan.Zero, 0);
         var intervals = samples.Zip(samples.Skip(1), (first, second) => (second.Timestamp - first.Timestamp).TotalSeconds)
@@ -64,10 +87,9 @@ public sealed record PowerSessionSummary(TimeSpan Duration, TimeSpan BatteryDura
             var after = samples[index];
             var elapsed = after.Timestamp - before.Timestamp;
             if (elapsed <= TimeSpan.Zero || elapsed.TotalSeconds > maximumGapSeconds
-                || before.Power.Source != PowerSource.Battery || after.Power.Source != PowerSource.Battery
-                || before.Power.BatteryDischargeWatts is not > 0 || after.Power.BatteryDischargeWatts is not > 0) continue;
+                || watts(index - 1) is not { } first || watts(index) is not { } second) continue;
             covered += elapsed;
-            energyWh += (before.Power.BatteryDischargeWatts.Value + after.Power.BatteryDischargeWatts.Value) / 2 * elapsed.TotalHours;
+            energyWh += (first + second) / 2 * elapsed.TotalHours;
         }
         return (covered, energyWh);
     }

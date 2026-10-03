@@ -6,5 +6,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Skald.Core\Skald.Core.csproj" />
+    <ProjectReference Include="..\Skald.Diagnostics\Skald.Diagnostics.csproj" />
+    <ProjectReference Include="..\Skald.Triage\Skald.Triage.csproj" />
   </ItemGroup>
 </Project>

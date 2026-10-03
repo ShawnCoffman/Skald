@@ -14,7 +14,7 @@
                 <TextBlock Text="Recordings" FontSize="26" FontWeight="SemiBold" />
                 <TextBlock x:Name="RecordingStateText" Text="Recording in progress" Foreground="#9ED8CA" Visibility="Collapsed" />
                 <TextBlock x:Name="SessionStatusText" Text="Looking for recordings…" Foreground="#B7C9D0" TextWrapping="Wrap" />
-                <Button Content="Refresh sessions" Click="RefreshButton_Click" HorizontalAlignment="Left" />
+                <StackPanel Orientation="Horizontal" Spacing="6"><Button Content="Refresh" Click="RefreshButton_Click" /><Button Content="Open folder" Click="OpenFolder_Click" /></StackPanel>
             </StackPanel>
             <Border Grid.Row="1" Background="#14222B" CornerRadius="8" Padding="6">
                 <ListView x:Name="SessionList" SelectionMode="Multiple" SelectionChanged="SessionList_SelectionChanged" BorderThickness="0" Background="Transparent" AutomationProperties.Name="Saved recordings">
@@ -29,13 +29,11 @@
                 <TextBlock Text="Selected recordings" Foreground="#B7C9D0" FontSize="12" />
                 <StackPanel Orientation="Horizontal" Spacing="6"><Button x:Name="ZipSelectedButton" Content="ZIP selected" Click="ZipSelected_Click" IsEnabled="False"/><Button x:Name="DeleteSelectedButton" Content="Delete selected" Click="DeleteSelected_Click" IsEnabled="False"/></StackPanel>
                 <Button x:Name="ZipAllButton" Content="ZIP all saved sessions" Click="ZipAll_Click" IsEnabled="False" HorizontalAlignment="Left" />
+                <CheckBox x:Name="RedactCheck" Content="Remove computer and user names" Click="ZipOptions_Click" />
+                <CheckBox x:Name="IncludeTracesCheck" Content="Include deep traces (large)" Click="ZipOptions_Click" />
+                <TextBlock x:Name="ZipOptionsText" Text="Deep traces cannot have names removed, so they are left out of a ZIP with names removed." Foreground="#98AEB9" FontSize="12" TextWrapping="Wrap" />
             </StackPanel>
-            <StackPanel Grid.Row="3" Spacing="6" Margin="0,10,0,0">
-                <TextBlock Text="Deep trace" FontSize="16" FontWeight="SemiBold" />
-                <TextBlock Text="Windows Performance Recorder captures short freezes and stalls." Foreground="#B7C9D0" FontSize="12" TextWrapping="Wrap" />
-                <Button x:Name="DeepTraceButton" Content="Start deep trace" Click="DeepTrace_Click" HorizontalAlignment="Left" />
-                <TextBlock x:Name="DeepTraceStatusText" Text="Saves an ETL for Windows Performance Analyzer." Foreground="#B7C9D0" TextWrapping="Wrap" FontSize="12" />
-            </StackPanel>
+            <TextBlock Grid.Row="3" Text="Use Record in the toolbar to capture. Its menu adds a deep trace (ETL) saved at each problem marker." Foreground="#98AEB9" FontSize="12" TextWrapping="Wrap" Margin="0,10,0,0" />
         </Grid>
         <TextBlock x:Name="EmptyReplayText" Grid.Column="1" Text="Select a saved session to replay." FontSize="20" Visibility="Collapsed" />
         <ScrollViewer x:Name="ReplayScroll" Grid.Column="1">
@@ -43,8 +41,17 @@
                 <StackPanel>
                     <TextBlock Text="Replay" FontSize="26" FontWeight="SemiBold" />
                     <TextBlock x:Name="SessionNameText" Text="Select a session" Foreground="#A5A7B0" />
+                    <TextBlock x:Name="MachineText" Foreground="#A5A7B0" FontSize="12" TextWrapping="Wrap" IsTextSelectionEnabled="True" />
                     <Button x:Name="ExportButton" Content="Export HTML Report" IsEnabled="False" Click="ExportButton_Click" HorizontalAlignment="Left" Margin="0,10,0,0" />
                 </StackPanel>
+                <Border x:Name="TracePanel" Background="#14222B" CornerRadius="8" Padding="16" Visibility="Collapsed">
+                    <StackPanel Spacing="6">
+                        <TextBlock Text="Deep traces" FontSize="18" FontWeight="SemiBold" />
+                        <TextBlock x:Name="TraceText" TextWrapping="Wrap" IsTextSelectionEnabled="True" />
+                        <Button Content="Show in folder" Click="ShowTraces_Click" HorizontalAlignment="Left" />
+                        <TextBlock Text="Open an ETL in Windows Performance Analyzer for DPC/ISR time by driver, disk I/O, hard faults and thread waits." Foreground="#AABFC8" FontSize="12" TextWrapping="Wrap" />
+                    </StackPanel>
+                </Border>
                 <Border Background="#142D2C" CornerRadius="8" Padding="16">
                     <StackPanel Spacing="8">
                         <TextBlock Text="Incident review" FontSize="18" FontWeight="SemiBold" />
@@ -60,7 +67,7 @@
                 </Border>
                 <Border Background="#17352F" CornerRadius="8" Padding="16"><StackPanel Spacing="6"><TextBlock Text="Power for this run" FontSize="18" FontWeight="SemiBold"/><TextBlock x:Name="RunPowerText" Text="Select a recording to see run average power and coverage." TextWrapping="Wrap" IsTextSelectionEnabled="True"/></StackPanel></Border>
                 <Border Background="#14222B" CornerRadius="8" Padding="16"><StackPanel Spacing="8"><TextBlock Text="Power recording analysis" FontSize="18" FontWeight="SemiBold"/><TextBlock x:Name="PowerAnalysisText" Text="Select a recording to analyze system draw and workload activity." TextWrapping="Wrap" IsTextSelectionEnabled="True"/><StackPanel Orientation="Horizontal" Spacing="8"><Button x:Name="BaselineButton" Content="Use selected as baseline" Click="Baseline_Click" IsEnabled="False"/><Button Content="Clear baseline" Click="ClearBaseline_Click"/></StackPanel><TextBlock x:Name="ComparisonText" Text="Choose a baseline, then select another recording to compare." TextWrapping="Wrap" IsTextSelectionEnabled="True" Foreground="#D9B27C"/></StackPanel></Border>
-                <Expander Header="Recording timeline · battery, workload, display, and thermals" HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch"><StackPanel Spacing="12"><local:HistoryChart x:Name="DischargeRecordingChart" MetricName="Battery discharge" Unit="W" Height="125"/><local:HistoryChart x:Name="CpuRecordingChart" MetricName="CPU utilization" Unit="%" Height="125"/><local:HistoryChart x:Name="GpuRecordingChart" MetricName="Busiest GPU engine" Unit="%" Height="125"/><local:HistoryChart x:Name="DiskRecordingChart" MetricName="Disk active" Unit="%" Height="125"/><local:HistoryChart x:Name="NetworkRecordingChart" MetricName="Network receive + send" Unit="B/s" Height="125"/><local:HistoryChart x:Name="BrightnessRecordingChart" MetricName="Display brightness" Unit="%" Height="125"/><local:HistoryChart x:Name="TemperatureRecordingChart" MetricName="CPU temperature" Unit="°C" Height="125"/><TextBlock x:Name="RecordingTimelineScale" Foreground="#A5A7B0"/></StackPanel></Expander>
+                <Expander Header="Recording timeline · battery, workload, display, thermals and power" HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch"><StackPanel Spacing="12"><local:HistoryChart x:Name="DischargeRecordingChart" MetricName="Battery discharge" Unit="W" Height="125"/><local:HistoryChart x:Name="CpuRecordingChart" MetricName="CPU utilization" Unit="%" Height="125"/><local:HistoryChart x:Name="GpuRecordingChart" MetricName="Busiest GPU engine" Unit="%" Height="125"/><local:HistoryChart x:Name="DiskRecordingChart" MetricName="Disk active" Unit="%" Height="125"/><local:HistoryChart x:Name="NetworkRecordingChart" MetricName="Network receive + send" Unit="B/s" Height="125"/><local:HistoryChart x:Name="BrightnessRecordingChart" MetricName="Display brightness" Unit="%" Height="125"/><local:HistoryChart x:Name="TemperatureRecordingChart" MetricName="CPU temperature" Unit="°C" Height="125"/><local:HistoryChart x:Name="CpuPowerRecordingChart" MetricName="CPU package power" Unit="W" Height="125"/><local:HistoryChart x:Name="GpuPowerRecordingChart" MetricName="GPU board power" Unit="W" Height="125"/><TextBlock x:Name="RecordingTimelineScale" Foreground="#A5A7B0"/></StackPanel></Expander>
                 <Border Background="#20252A" CornerRadius="8" Padding="18">
                     <StackPanel>
                         <TextBlock x:Name="ReplayTimeText" Text="No session loaded" FontSize="20" FontWeight="SemiBold" />
@@ -83,7 +90,7 @@
                 <Expander Header="Power, clocks &amp; thermals" HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch"><local:PowerDashboard x:Name="PowerReplay" /></Expander>                <Grid ColumnSpacing="18">
                     <Grid.ColumnDefinitions><ColumnDefinition Width="3*" /><ColumnDefinition Width="2*" /></Grid.ColumnDefinitions>
                     <Border Grid.Column="0" Background="#1B1D22" CornerRadius="8" Padding="18"><StackPanel><TextBlock Text="Historical processes" FontSize="18" FontWeight="SemiBold" Margin="0,0,0,10" /><ListView x:Name="ReplayProcessList" MaxHeight="400" BorderThickness="0" Background="Transparent"><ListView.ItemTemplate><DataTemplate><Grid Padding="0,6"><Grid.ColumnDefinitions><ColumnDefinition Width="2*" /><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions><TextBlock Text="{Binding Name}" /><TextBlock Text="{Binding CpuDisplay}" Grid.Column="1" Foreground="#C8CBD2" /><TextBlock Text="{Binding WorkingSetDisplay}" Grid.Column="2" Foreground="#C8CBD2" /></Grid></DataTemplate></ListView.ItemTemplate></ListView></StackPanel></Border>
-                    <Border Grid.Column="1" Background="#1B1D22" CornerRadius="8" Padding="18"><StackPanel><TextBlock Text="Events" FontSize="18" FontWeight="SemiBold" Margin="0,0,0,10" /><ListView x:Name="EventList" MaxHeight="400" SelectionChanged="EventList_SelectionChanged" BorderThickness="0" Background="Transparent"><ListView.ItemTemplate><DataTemplate><StackPanel Padding="0,5"><TextBlock Text="{Binding Time}" Foreground="#AABFC8" FontSize="12"/><TextBlock Text="{Binding Type}" /><TextBlock Text="{Binding Detail}" Foreground="#A5A7B0" FontSize="12" TextWrapping="Wrap" /></StackPanel></DataTemplate></ListView.ItemTemplate></ListView></StackPanel></Border>
+                    <Border Grid.Column="1" Background="#1B1D22" CornerRadius="8" Padding="18"><StackPanel><TextBlock Text="Events" FontSize="18" FontWeight="SemiBold" /><CheckBox x:Name="BackgroundEventsCheck" Content="Show background process starts and exits" Click="BackgroundEvents_Click" Margin="0,0,0,6" /><ListView x:Name="EventList" MaxHeight="400" SelectionChanged="EventList_SelectionChanged" BorderThickness="0" Background="Transparent"><ListView.ItemTemplate><DataTemplate><StackPanel Padding="0,5"><TextBlock Text="{Binding Time}" Foreground="#AABFC8" FontSize="12"/><TextBlock Text="{Binding Type}" /><TextBlock Text="{Binding Detail}" Foreground="#A5A7B0" FontSize="12" TextWrapping="Wrap" /></StackPanel></DataTemplate></ListView.ItemTemplate></ListView></StackPanel></Border>
                 </Grid>
             </StackPanel>
         </ScrollViewer>

@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.Diagnostics;
 using System.Globalization;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
@@ -20,8 +21,10 @@ public sealed partial class SessionReplayPage : Page, ITelemetryPage
     private readonly ObservableCollection<EventRow> _events = [];
     private readonly ObservableCollection<IncidentRow> _incidentRows = [];
     private readonly ObservableCollection<MarkerRow> _markers = [];
-    private ReliabilityHistory? _reliability;
-    private CrashDumpInventory? _dumps;
+    private ReliabilityHistory? _localReliability;
+    private CrashDumpInventory? _localDumps;
+    private IReadOnlyList<ReliabilityEvent> _reports = [];
+    private IReadOnlyList<CrashDumpFile> _dumps = [];
     private SessionDocument? _document;
     private PowerSessionSummary? _powerSummary;
     private PowerSessionSummary? _baseline;
@@ -35,7 +38,6 @@ public sealed partial class SessionReplayPage : Page, ITelemetryPage
     private bool _hasLoadedDirectory;
     private int _selectionVersion;
     private readonly PerformancePage _replayPerformance = new();
-    public event EventHandler? DeepTraceRequested;
 
     public SessionReplayPage()
     {
@@ -61,15 +63,38 @@ public sealed partial class SessionReplayPage : Page, ITelemetryPage
         _activeRecordingPath = path;
         UpdateArchiveActions();
     }
-    private void DeepTrace_Click(object sender, RoutedEventArgs e) => DeepTraceRequested?.Invoke(this, EventArgs.Empty);
-    public void SetDeepTraceStatus(bool recording, string message)
-    {
-        DeepTraceButton.Content = recording ? "Stop and save deep trace" : "Start deep trace";
-        DeepTraceButton.IsEnabled = true;
-        DeepTraceStatusText.Text = message;
-    }
-    public void SetDeepTraceBusy() => DeepTraceButton.IsEnabled = false;
     private async void RefreshButton_Click(object sender, RoutedEventArgs e) => await RefreshSessionsAsync();
+    private void OpenFolder_Click(object sender, RoutedEventArgs e) => OpenRecordingsFolder();
+
+    public void OpenRecordingsFolder()
+    {
+        try
+        {
+            Directory.CreateDirectory(SessionLocations.RecordingsDirectory);
+            Process.Start(new ProcessStartInfo("explorer.exe") { ArgumentList = { SessionLocations.RecordingsDirectory } })?.Dispose();
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.ComponentModel.Win32Exception)
+        { SessionStatusText.Text = $"Could not open the recordings folder: {ex.Message}"; }
+    }
+
+    private void ShowTraces_Click(object sender, RoutedEventArgs e)
+    {
+        if (_loadedFilePath is null || _document is not { Traces.Count: > 0 } document) return;
+        var first = Path.Combine(Path.GetDirectoryName(_loadedFilePath)!, Path.GetFileName(document.Traces[0].FileName));
+        // Explorer expects /select,"path" as one token with only the path quoted; ArgumentList would quote the whole token.
+        var arguments = File.Exists(first) ? $"/select,\"{first}\"" : $"\"{Path.GetDirectoryName(_loadedFilePath)!}\"";
+        try { Process.Start(new ProcessStartInfo("explorer.exe") { Arguments = arguments })?.Dispose(); }
+        catch (System.ComponentModel.Win32Exception ex) { SessionStatusText.Text = $"Could not open the folder: {ex.Message}"; }
+    }
+
+    private void ZipOptions_Click(object sender, RoutedEventArgs e)
+    {
+        // A trace cannot have names removed, so the two choices exclude each other.
+        if (ReferenceEquals(sender, RedactCheck) && RedactCheck.IsChecked == true) IncludeTracesCheck.IsChecked = false;
+        if (ReferenceEquals(sender, IncludeTracesCheck) && IncludeTracesCheck.IsChecked == true) RedactCheck.IsChecked = false;
+    }
+
+    private void BackgroundEvents_Click(object sender, RoutedEventArgs e) => RenderEvents();
 
     private async void Page_Loaded(object sender, RoutedEventArgs e)
     {
@@ -80,12 +105,7 @@ public sealed partial class SessionReplayPage : Page, ITelemetryPage
 
     public async Task RefreshSessionsAsync()
     {
-        var documents = Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
-        var root = string.IsNullOrWhiteSpace(documents) ? AppContext.BaseDirectory : documents;
-        var directories = Directory.Exists(root)
-            ? Directory.EnumerateDirectories(root, "* Sessions", SearchOption.TopDirectoryOnly)
-            : Enumerable.Empty<string>();
-        var files = directories.Where(Directory.Exists)
+        var files = SessionLocations.SearchDirectories.Where(Directory.Exists)
             .SelectMany(directory => Directory.EnumerateFiles(directory, "*.perfsession"))
             .Select(path => new FileInfo(path))
             .OrderByDescending(file => file.LastWriteTimeUtc)
@@ -95,7 +115,8 @@ public sealed partial class SessionReplayPage : Page, ITelemetryPage
         using var scroll = ScrollPositionKeeper.Capture(this);
         _sessions.Clear();
         foreach (var file in files) _sessions.Add(file);
-        SessionStatusText.Text = files.Length == 0 ? "No recordings yet. Press Record to create one." : $"{files.Length} recording(s)";
+        SessionStatusText.Text = (files.Length == 0 ? "No recordings yet. Press Record to create one." : $"{files.Length} recording(s)")
+            + (SessionLocations.IsCloudSynced(SessionLocations.DocumentsDirectory) ? " · kept in local app data because Documents is synced by OneDrive" : string.Empty);
         UpdateArchiveActions();
         await Task.CompletedTask;
     }
@@ -123,15 +144,13 @@ public sealed partial class SessionReplayPage : Page, ITelemetryPage
         if (_archiveBusy || files.Count == 0) return;
         _archiveBusy = true;
         UpdateArchiveActions();
-        SessionStatusText.Text = $"Creating ZIP from {files.Count} saved session(s)…";
+        var options = new SessionArchiveOptions { Redact = RedactCheck.IsChecked == true, IncludeTraces = IncludeTracesCheck.IsChecked == true };
+        SessionStatusText.Text = $"Creating ZIP from {files.Count} saved session(s){(options.Redact ? " with names removed" : string.Empty)}…";
         try
         {
-            var documents = Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
-            var root = string.IsNullOrWhiteSpace(documents) ? AppContext.BaseDirectory : documents;
-            var directory = Path.Combine(root, "Skald Exports");
-            var path = Path.Combine(directory, $"Skald_Sessions_{DateTime.Now:yyyyMMdd_HHmmss_fff}.zip");
-            await SessionArchive.CreateAsync(files.Select(file => file.Path).ToArray(), path);
-            SessionStatusText.Text = $"ZIP saved: {path} ({files.Count} session(s)).";
+            var path = Path.Combine(SessionLocations.ExportsDirectory, $"Skald_Sessions_{DateTime.Now:yyyyMMdd_HHmmss_fff}{(options.Redact ? "_redacted" : string.Empty)}.zip");
+            await SessionArchive.CreateAsync(files.Select(file => file.Path).ToArray(), path, options);
+            SessionStatusText.Text = $"ZIP saved: {path} ({files.Count} session(s){(options.Redact ? ", names removed" : options.IncludeTraces ? ", with deep traces" : string.Empty)}).";
         }
         catch (Exception ex) { SessionStatusText.Text = $"Could not create ZIP: {ex.Message}"; }
         finally { _archiveBusy = false; UpdateArchiveActions(); }
@@ -145,7 +164,7 @@ public sealed partial class SessionReplayPage : Page, ITelemetryPage
         var dialog = new ContentDialog
         {
             Title = files.Length == 1 ? "Delete this session?" : $"Delete {files.Length} sessions?",
-            Content = new TextBlock { Text = "This permanently deletes the selected .perfsession files. Export a ZIP first if you need a copy.", TextWrapping = TextWrapping.Wrap },
+            Content = new TextBlock { Text = "This permanently deletes the selected .perfsession files and their deep traces. Export a ZIP first if you need a copy.", TextWrapping = TextWrapping.Wrap },
             PrimaryButtonText = "Delete permanently",
             CloseButtonText = "Cancel",
             DefaultButton = ContentDialogButton.Close,
@@ -158,7 +177,13 @@ public sealed partial class SessionReplayPage : Page, ITelemetryPage
         var errors = new List<string>();
         foreach (var file in files)
         {
-            try { File.Delete(file.Path); removedPaths.Add(file.Path); }
+            try
+            {
+                foreach (var trace in Directory.EnumerateFiles(Path.GetDirectoryName(file.Path)!, Path.GetFileNameWithoutExtension(file.Path) + ".*.etl"))
+                    File.Delete(trace);
+                File.Delete(file.Path);
+                removedPaths.Add(file.Path);
+            }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             { errors.Add($"{file.DisplayName}: {ex.Message}"); }
         }
@@ -181,6 +206,10 @@ public sealed partial class SessionReplayPage : Page, ITelemetryPage
         _powerSummary = null;
         _loadedFilePath = _loadedDisplayName = null;
         SessionNameText.Text = "Select a session";
+        MachineText.Text = string.Empty;
+        TracePanel.Visibility = Visibility.Collapsed;
+        _reports = [];
+        _dumps = [];
         ExportButton.IsEnabled = BaselineButton.IsEnabled = false;
         ReplaySlider.Value = ReplaySlider.Maximum = 0;
         ReplayTimeText.Text = "No session loaded";
@@ -210,15 +239,13 @@ public sealed partial class SessionReplayPage : Page, ITelemetryPage
             BaselineButton.IsEnabled = true;
             RenderPowerAnalysis(file.DisplayName);
             RenderPowerTimeline();
-            SessionNameText.Text = $"{file.DisplayName} · {_document.Samples.Count} samples";
+            SessionNameText.Text = $"{file.DisplayName} · {_document.Samples.Count} samples" + (_document.Metadata.Recovered ? " · recovered after an interruption" : string.Empty) + (_document.Redacted ? " · names removed" : string.Empty);
+            MachineText.Text = DescribeMachine(_document);
+            RenderTraces();
             ExportButton.IsEnabled = true;
             ReplaySlider.Maximum = Math.Max(0, _document.Samples.Count - 1);
             ReplaySlider.Value = 0;
-            _events.Clear();
-            foreach (var sessionEvent in _document.Events.OrderByDescending(item => item.Timestamp))
-            {
-                _events.Add(new EventRow(sessionEvent.Timestamp.ToLocalTime().ToString("HH:mm:ss", CultureInfo.InvariantCulture), sessionEvent.Type.ToString(), sessionEvent.Note ?? string.Empty, sessionEvent.Timestamp));
-            }
+            RenderEvents();
 
             _markers.Clear();
             foreach (var marker in _document.Events.Where(item => item.Type == SessionEventType.UserMarker).OrderByDescending(item => item.Timestamp))
@@ -254,21 +281,44 @@ public sealed partial class SessionReplayPage : Page, ITelemetryPage
         else ComparisonText.Text = "Choose a baseline, then select another recording to compare.";
     }
 
+    // Windows reports come from the recording itself. Only a recording from before Skald saved them, made on this same PC, falls
+    // back to reading this PC's logs now; a recording from another PC never shows the viewer's reports.
     private async Task LoadIncidentSourcesAsync(SessionDocument selectedDocument)
     {
-        IncidentStatusText.Text = "Reading retained Windows reports and dump inventory…";
+        if (selectedDocument.WindowsEvidence is { } saved)
+        {
+            _reports = saved.Events;
+            _dumps = saved.Dumps;
+            IncidentStatusText.Text = $"Windows reports saved with this recording, read on {selectedDocument.Metadata.MachineName}: {saved.Events.Count} report(s) and {saved.Dumps.Count} dump file(s) " +
+                $"from {saved.From.ToLocalTime():g} to {saved.To.ToLocalTime():g}. Events near a marker may be related, but timing alone does not prove cause.";
+            RenderIncident();
+            return;
+        }
+        _reports = [];
+        _dumps = [];
+        if (selectedDocument.Redacted || !selectedDocument.Metadata.MachineName.Equals(Environment.MachineName, StringComparison.OrdinalIgnoreCase))
+        {
+            IncidentStatusText.Text = selectedDocument.Redacted
+                ? "This recording has no saved Windows reports and its computer name was removed, so this PC's reports cannot be matched to it and none are shown."
+                : $"This recording has no saved Windows reports (it predates that feature) and was made on {selectedDocument.Metadata.MachineName}, not this PC, so none are shown. Run Check hardware on that machine for its reports.";
+            RenderIncident();
+            return;
+        }
+        IncidentStatusText.Text = "This recording has no saved Windows reports. Reading this PC's retained reports instead…";
         try
         {
-            if (_reliability is null || DateTimeOffset.Now - _reliability.CollectedAt > TimeSpan.FromMinutes(5))
+            if (_localReliability is null || DateTimeOffset.Now - _localReliability.CollectedAt > TimeSpan.FromMinutes(5))
             {
                 var reports = WindowsReliabilityCollector.CollectAsync();
                 var dumps = CrashDumpCollector.CollectAsync();
                 await Task.WhenAll(reports, dumps);
-                _reliability = await reports;
-                _dumps = await dumps;
+                _localReliability = await reports;
+                _localDumps = await dumps;
             }
             if (!ReferenceEquals(_document, selectedDocument)) return;
-            IncidentStatusText.Text = $"Windows reports: {_reliability?.Events.Count ?? 0} retained; dumps: {_dumps?.Files.Count ?? 0}. " +
+            _reports = _localReliability?.Events ?? [];
+            _dumps = _localDumps?.Files ?? [];
+            IncidentStatusText.Text = $"Read from this PC now, because the recording predates saved reports: {_reports.Count} retained report(s); dumps: {_dumps.Count}. " +
                 "Events near a marker may be related, but timing alone does not prove cause.";
             RenderIncident();
         }
@@ -321,9 +371,22 @@ public sealed partial class SessionReplayPage : Page, ITelemetryPage
                 .Select(p => $"{p.Name} ({p.ProcessId}) {(p.ReadBytesPerSecond.GetValueOrDefault() + p.WriteBytesPerSecond.GetValueOrDefault()) / 1048576d:F1} MB/s");
             Add(near.Timestamp, "Processes near marker", $"Top CPU: {string.Join(", ", cpu)}. Top process I/O: {string.Join(", ", io)}. Process I/O is not disk attribution.");
         }
-        foreach (var report in _reliability?.Events.Where(item => item.Timestamp >= start && item.Timestamp <= marker.Timestamp.AddMinutes(10)) ?? [])
+        foreach (var exit in _document.Events.Where(item => item.Type == SessionEventType.ProcessExit && item.HadWindow == true && item.Timestamp >= start && item.Timestamp <= end))
+        {
+            var crash = _reports.FirstOrDefault(report => report.Category == "Applications" && exit.ProcessName is { } name
+                && report.Component.Contains(Path.GetFileNameWithoutExtension(name), StringComparison.OrdinalIgnoreCase)
+                && Math.Abs((report.Timestamp - exit.Timestamp).TotalSeconds) <= 30);
+            Add(exit.Timestamp, "Program exited", (exit.Note ?? exit.ProcessName ?? "Process exited")
+                + (crash is null ? ". No Windows crash or hang report within 30 s; it may have been closed normally." : $". Windows reported: {crash.Provider} / Event {crash.EventId}: {crash.Summary}"));
+        }
+        var reportsUntil = marker.Timestamp.AddMinutes(10);
+        foreach (var report in _reports.Where(item => item.Timestamp >= start && item.Timestamp <= reportsUntil))
             Add(report.Timestamp, $"Windows · {report.Category}", $"{report.Provider} / Event {report.EventId} / {report.Component}: {report.Summary}");
-        foreach (var dump in _dumps?.Files.Where(item => item.ModifiedAt >= start && item.ModifiedAt <= marker.Timestamp.AddMinutes(10)) ?? [])
+        // A recovered recording stopped because the app, Windows or power died; the next boot's crash and restart reports explain how.
+        if (_document.Metadata.Recovered)
+            foreach (var report in _reports.Where(item => item.Timestamp > reportsUntil && item.Category == "Crashes & restarts"))
+                Add(report.Timestamp, "After the recording stopped · Windows", $"{report.Provider} / Event {report.EventId}: {report.Summary}");
+        foreach (var dump in _dumps.Where(item => item.ModifiedAt >= start && item.ModifiedAt <= reportsUntil))
             Add(dump.ModifiedAt, "Dump candidate", $"{dump.Kind}: {dump.Path}. File time is a correlation, not proof of this incident.");
 
         var ordered = _incidentRows.OrderBy(row => row.Timestamp).ToArray();
@@ -365,6 +428,10 @@ public sealed partial class SessionReplayPage : Page, ITelemetryPage
             ? $"Average battery draw: {average:F1} W · Peak sampled draw: {Watts(summary.PeakDischargeWatts)} · Estimated battery energy used: {summary.EstimatedBatteryEnergyWh:F2} Wh\n" +
               $"Coverage: {summary.BatteryDuration.TotalMinutes:F1} of {summary.Duration.TotalMinutes:F1} minutes ({summary.RunCoveragePercent:F0}% of run). Source: battery discharge; average and energy are integrated across adjacent valid samples."
             : "Run average system draw unavailable. No continuous battery-discharge readings were captured; AC and desktop power require a verified whole-system source.";
+        if (summary.Domains.Count > 0)
+            RunPowerText.Text += "\n" + string.Join("\n", summary.Domains.Select(domain =>
+                $"{domain.Label}: average {domain.AverageWatts:F1} W · peak {domain.PeakWatts:F1} W · {domain.EnergyWh:F2} Wh over {domain.CoveragePercent:F0}% of the run")) +
+                "\nCPU package and GPU board are separate measured domains; they are not added together or treated as whole-system power.";
         PowerAnalysisText.Text = $"Duration {summary.Duration.TotalMinutes:F1} min · battery draw span {summary.BatteryDuration.TotalMinutes:F1} min · {summary.BatterySamples} / {_document.Samples.Count} samples with measured battery draw\n" +
             $"Estimated runtime at average draw: {(summary.RemainingRuntimeHours is { } remaining ? $"{remaining:F1} h remaining" : "Unavailable")} / {(summary.FullChargeRuntimeHours is { } full ? $"{full:F1} h from full" : "Unavailable")}\n" +
             $"Battery health: {(summary.BatteryHealthPercent is { } health ? $"{health:F1}%" : "Unavailable")} · Average brightness: {(summary.AverageBrightnessPercent is { } brightness ? $"{brightness:F1}%" : "Unavailable")}\n" +
@@ -395,15 +462,74 @@ public sealed partial class SessionReplayPage : Page, ITelemetryPage
         BrightnessRecordingChart.SetTimedSeries(samples.Select(sample => (sample.Timestamp, sample.Power.DisplayBrightnessPercent is { } brightness ? (double?)brightness : null)), end, 100, Color.FromArgb(255, 224, 208, 140), window);
         var temperature = samples.Select(sample => (sample.Timestamp, SensorCatalog.GetSensors(sample).FirstOrDefault(sensor => sensor.Scope == "CPU sensor" && sensor.Kind == "Temperature")?.Value)).ToArray();
         TemperatureRecordingChart.SetTimedSeries(temperature, end, Math.Max(50, temperature.Select(item => item.Item2.GetValueOrDefault()).Max() * 1.1), Color.FromArgb(255, 237, 132, 113), window);
+        var sensors = samples.Select(sample => (sample.Timestamp, Sensors: SensorCatalog.GetSensors(sample))).ToArray();
+        var cpuPower = sensors.Select(item => (item.Timestamp, item.Sensors.Where(sensor => sensor.Scope == "CPU package" && sensor.Kind == "Power").Select(sensor => sensor.Value).FirstOrDefault(value => value.HasValue))).ToArray();
+        CpuPowerRecordingChart.SetTimedSeries(cpuPower, end, Math.Max(10, cpuPower.Select(item => item.Item2.GetValueOrDefault()).Max() * 1.1), Color.FromArgb(255, 237, 180, 101), window);
+        var gpuPower = sensors.Select(item => (item.Timestamp, item.Sensors.Where(sensor => sensor.Scope == "GPU board" && sensor.Kind == "Power").Select(sensor => sensor.Value).FirstOrDefault(value => value.HasValue))).ToArray();
+        GpuPowerRecordingChart.SetTimedSeries(gpuPower, end, Math.Max(10, gpuPower.Select(item => item.Item2.GetValueOrDefault()).Max() * 1.1), Color.FromArgb(255, 102, 202, 232), window);
         RecordingTimelineScale.Text = $"{samples[0].Timestamp.ToLocalTime():g} – {end.ToLocalTime():g} · Each chart has its own units; missing readings leave gaps.";
+    }
+
+    private void RenderEvents()
+    {
+        _events.Clear();
+        if (_document is null) return;
+        var background = BackgroundEventsCheck.IsChecked == true;
+        foreach (var sessionEvent in _document.Events.OrderByDescending(item => item.Timestamp))
+        {
+            // Starts and exits of background processes are frequent; programs with a window are always shown.
+            if (!background && sessionEvent.Type is SessionEventType.ProcessLaunch or SessionEventType.ProcessExit && sessionEvent.HadWindow != true) continue;
+            _events.Add(new EventRow(sessionEvent.Timestamp.ToLocalTime().ToString("HH:mm:ss", CultureInfo.InvariantCulture), Label(sessionEvent.Type), sessionEvent.Note ?? string.Empty, sessionEvent.Timestamp));
+        }
+
+        static string Label(SessionEventType type) => type switch
+        {
+            SessionEventType.UserMarker => "Problem marker",
+            SessionEventType.CpuSaturation => "CPU",
+            SessionEventType.MemoryPressure => "Memory",
+            SessionEventType.DiskActivity => "Disk",
+            SessionEventType.ProcessLaunch => "Process started",
+            SessionEventType.ProcessExit => "Process exited",
+            SessionEventType.PowerSourceChanged => "Power source",
+            SessionEventType.NetworkChanged => "Network",
+            SessionEventType.DeepTraceSaved => "Deep trace saved",
+            _ => type.ToString()
+        };
+    }
+
+    private void RenderTraces()
+    {
+        if (_document is not { Traces.Count: > 0 } document || _loadedFilePath is null)
+        {
+            TracePanel.Visibility = Visibility.Collapsed;
+            return;
+        }
+        var folder = Path.GetDirectoryName(_loadedFilePath)!;
+        TraceText.Text = string.Join("\n", document.Traces.Select(trace =>
+            $"{trace.SavedAt.ToLocalTime():HH:mm:ss} · {trace.Reason} · {trace.FileName} · {trace.SizeBytes / 1048576d:F0} MB"
+            + (File.Exists(Path.Combine(folder, Path.GetFileName(trace.FileName))) ? string.Empty : " · file not found beside the recording")));
+        TracePanel.Visibility = Visibility.Visible;
+    }
+
+    private static string DescribeMachine(SessionDocument document)
+    {
+        if (document.Machine is not { } machine)
+            return $"Recorded on {document.Metadata.MachineName} · {document.Metadata.OperatingSystem}. This recording predates saved machine identity and drivers.";
+        string? Detail(string label) => machine.Details.FirstOrDefault(item => item.Label == label)?.Value;
+        var parts = new[] { Detail("Make / model"), Detail("Processor"), Detail("BIOS version"), Detail("Windows release") }.Where(part => !string.IsNullOrWhiteSpace(part));
+        return $"Recorded on {document.Metadata.MachineName} · {string.Join(" · ", parts)} · {machine.Drivers.Count} drivers saved";
     }
 
     private async void ExportButton_Click(object sender, RoutedEventArgs e)
     {
         if (_document is null || _loadedFilePath is null) return;
         var htmlPath = Path.ChangeExtension(_loadedFilePath, ".html");
-        await SessionReportWriter.WriteHtmlAsync(_document, htmlPath);
-        SessionStatusText.Text = $"Exported {Path.GetFileName(htmlPath)}";
+        try
+        {
+            await SessionReportWriter.WriteHtmlAsync(_document, htmlPath);
+            SessionStatusText.Text = $"Exported {htmlPath}";
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { SessionStatusText.Text = $"Could not export the report: {ex.Message}"; }
     }
 
     private void ReplaySlider_ValueChanged(object sender, RangeBaseValueChangedEventArgs e)

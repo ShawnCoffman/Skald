@@ -1,3 +1,5 @@
+using System.ComponentModel;
+using System.Diagnostics;
 using System.Globalization;
 using Microsoft.UI.Dispatching;
 using Microsoft.UI.Xaml;
@@ -18,8 +20,13 @@ public sealed partial class MainWindow : Window, IDisposable
     private readonly WindowsMetricsCollector _collector = new();
     private readonly InitialDiagnosticAnalyzer _analyzer = new();
     private readonly RollingTelemetryBuffer _rollingBuffer = new(TimeSpan.FromMinutes(5));
+    // A recording longer than this is saved and stopped: every sample stays in memory until Stop (about 110 MB per hour).
+    private static readonly TimeSpan MaximumRecording = TimeSpan.FromHours(2);
+    // A recording started by Mark Problem saves itself this long after the last marker.
+    private static readonly TimeSpan MarkerTail = TimeSpan.FromMinutes(2);
     private readonly FlightRecorder _recorder = new();
     private readonly WindowsTraceCapture _trace = new();
+    private readonly RecordingPreferences _preferences = RecordingPreferences.Load();
     private readonly DispatcherQueueTimer _timer;
     private readonly HomePage _homePage = new();
     private readonly TriagePage _triagePage = new();
@@ -41,6 +48,10 @@ public sealed partial class MainWindow : Window, IDisposable
     private bool _isSampling;
     private bool _isStoppingRecording;
     private DateTimeOffset? _powerRecordingStopAt;
+    private DateTimeOffset? _markerStopAt;
+    private Task<SessionMachine>? _machineTask;
+    private Task? _traceSave;
+    private int _traceCount;
 
     public MainWindow()
     {
@@ -66,8 +77,6 @@ public sealed partial class MainWindow : Window, IDisposable
         _gpuPage.ProcessesRequested += OpenProcesses;
         _disksPage.ProcessesRequested += OpenProcesses;
         _powerPage.TimedRecordingRequested += StartTimedPowerRecording;
-        _recordingsPage.DeepTraceRequested += (_, _) => DeepTrace_Click();
-        if (_trace.IsRecording) _recordingsPage.SetDeepTraceStatus(true, "A Skald WPR trace may still be running from a previous app session. Stop and save it here.");
 
         _timer = DispatcherQueue.GetForCurrentThread().CreateTimer();
         _timer.Interval = TimeSpan.FromSeconds(2);
@@ -75,12 +84,21 @@ public sealed partial class MainWindow : Window, IDisposable
         _timer.Start();
         Closed += MainWindow_Closed;
         _ = RecoverInterruptedRecordingsAsync();
+        _ = SaveLeftoverTraceAsync();
     }
 
-    private static string SessionsDirectory()
+    // Windows reports for the recording's own window, read on this machine while the session is saved.
+    // ConfigureAwait(false) matters: Dispose blocks the UI thread on StopAsync, and a continuation posted back to it would deadlock.
+    private static async Task<SessionWindowsEvidence?> CollectWindowsEvidence(SessionMetadata metadata, CancellationToken cancellationToken)
+        => await SessionEvidenceCollector.CollectWindowsAsync(metadata.StartedAt, metadata.EndedAt).WaitAsync(TimeSpan.FromSeconds(20), cancellationToken).ConfigureAwait(false);
+
+    // A recovered recording ended in a crash, freeze or power loss; the boot that followed logs the unclean shutdown, so the window
+    // runs on past the last sample. Journals from another machine (a copied folder) get no local evidence.
+    private static async Task<SessionWindowsEvidence?> CollectRecoveryEvidence(SessionMetadata metadata, CancellationToken cancellationToken)
     {
-        var documents = Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
-        return Path.Combine(string.IsNullOrWhiteSpace(documents) ? AppContext.BaseDirectory : documents, "Skald Sessions");
+        if (!metadata.MachineName.Equals(Environment.MachineName, StringComparison.OrdinalIgnoreCase)) return null;
+        var until = DateTimeOffset.UtcNow < metadata.EndedAt.AddHours(24) ? DateTimeOffset.UtcNow : metadata.EndedAt.AddHours(24);
+        return await SessionEvidenceCollector.CollectWindowsAsync(metadata.StartedAt, until).WaitAsync(TimeSpan.FromSeconds(20), cancellationToken).ConfigureAwait(false);
     }
 
     // A recording that was running when the app, Windows or the power died leaves a journal behind; turn it back into a session.
@@ -90,11 +108,12 @@ public sealed partial class MainWindow : Window, IDisposable
         {
             var recovered = 0;
             var failed = 0;
-            foreach (var journal in FlightRecorder.FindInterruptedJournals(SessionsDirectory()))
+            foreach (var journal in SessionLocations.SearchDirectories.SelectMany(FlightRecorder.FindInterruptedJournals))
             {
                 // One damaged journal must not stop the others from being recovered.
-                try { if (await FlightRecorder.RecoverAsync(journal) is not null) recovered++; }
-                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Text.Json.JsonException or InvalidDataException) { failed++; }
+                try { if (await FlightRecorder.RecoverAsync(journal, CollectRecoveryEvidence) is not null) recovered++; }
+                // InvalidOperationException is how Brotli reports corrupt data.
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Text.Json.JsonException or InvalidDataException or InvalidOperationException) { failed++; }
             }
             if (recovered == 0 && failed == 0) return;
             RecorderStatusText.Text = (recovered > 0 ? $"Recovered {recovered} interrupted recording{(recovered == 1 ? string.Empty : "s")}" : string.Empty)
@@ -118,7 +137,14 @@ public sealed partial class MainWindow : Window, IDisposable
             _rollingBuffer.Add(snapshot);
             _recorder.Append(snapshot);
             UpdateDashboard(snapshot);
-            if (_powerRecordingStopAt is { } stopAt && DateTimeOffset.UtcNow >= stopAt)
+            if (_recorder.IsRecording && !_isStoppingRecording && _powerRecordingStopAt is null
+                && (_markerStopAt is { } markerStop && DateTimeOffset.UtcNow >= markerStop
+                    || _recorder.StartedAt is { } started && DateTimeOffset.UtcNow - started >= MaximumRecording))
+            {
+                var limit = _markerStopAt is { } due && DateTimeOffset.UtcNow >= due ? "Saved 2 minutes after the last marker" : "Saved at the 2-hour recording limit";
+                if (await StopRecordingAsync()) RecorderStatusText.Text = $"{limit} · {RecorderStatusText.Text}";
+            }
+            else if (_powerRecordingStopAt is { } stopAt && DateTimeOffset.UtcNow >= stopAt)
             {
                 _powerRecordingStopAt = null;
                 if (await StopRecordingAsync())
@@ -164,9 +190,11 @@ public sealed partial class MainWindow : Window, IDisposable
             default: _activePage?.Update(snapshot, findings); break;
         }
         LastUpdatedText.Text = $"Updated {snapshot.Timestamp.ToLocalTime():HH:mm:ss}";
-        if (_recorder.IsRecording)
+        if (_recorder.IsRecording && !_isStoppingRecording && !_trace.IsSaving)
         {
-            RecorderStatusText.Text = $"Recording · {_recorder.SampleCount} samples";
+            RecorderStatusText.Text = $"Recording · {_recorder.SampleCount} samples"
+                + (_trace.IsRecording ? " · deep trace on" : string.Empty)
+                + (_markerStopAt is { } stop ? $" · saves in {Math.Max(0, (stop - DateTimeOffset.UtcNow).TotalSeconds):F0} s" : string.Empty);
         }
     }
 
@@ -201,7 +229,6 @@ public sealed partial class MainWindow : Window, IDisposable
             "network" => _networkPage,
             "power" => _powerPage,
             "hardware" => _hardwarePage,
-            "recorder" => new RecorderPage(),
             "sessions" => _recordingsPage,
             _ => _homePage
         };
@@ -237,7 +264,7 @@ public sealed partial class MainWindow : Window, IDisposable
 
     private void AnalyzePerformance_Click(object sender, RoutedEventArgs e) => AnalyzePerformance();
 
-    private async void RecordButton_Click(object sender, RoutedEventArgs e)
+    private async void RecordButton_Click(SplitButton sender, SplitButtonClickEventArgs args)
     {
         if (_isStoppingRecording) return;
         if (!_recorder.IsRecording)
@@ -254,15 +281,78 @@ public sealed partial class MainWindow : Window, IDisposable
 
     private void StartRecording()
     {
-        var directory = SessionsDirectory();
+        var directory = SessionLocations.RecordingsDirectory;
         var fileName = $"Skald_{DateTime.Now.ToString("yyyyMMdd_HHmmss_fff", CultureInfo.InvariantCulture)}.perfsession";
         var path = Path.Combine(directory, fileName);
         var history = _rollingBuffer.GetSnapshot();
         _recorder.Start(path, 2, history);
+        _markerStopAt = null;
+        _traceCount = 0;
+        _traceSave = null;
+        _machineTask = SessionEvidenceCollector.CollectMachineAsync();
+        _ = AttachMachineAsync(_machineTask, path);
         _recordingsPage.SetActiveRecordingPath(path);
         RecordButton.Content = "■ Stop";
         _recordingsPage.SetRecording(true);
         RecorderStatusText.Text = $"Recording · {history.Count} buffered samples";
+        if (_preferences.IncludeDeepTrace && WindowsTraceCapture.IsElevated && _trace.IsAvailable) _ = StartTraceAsync();
+    }
+
+    // Machine identity and drivers take several seconds to read; they join the recording when ready.
+    private async Task AttachMachineAsync(Task<SessionMachine> machine, string path)
+    {
+        try
+        {
+            var result = await machine;
+            if (string.Equals(_recorder.FilePath, path, StringComparison.OrdinalIgnoreCase)) _recorder.SetMachine(result);
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException) { /* The recording is still useful without machine identity. */ }
+    }
+
+    private async Task StartTraceAsync()
+    {
+        try
+        {
+            var error = await _trace.StartAsync();
+            if (error is not null) RecorderStatusText.Text = error;
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or Win32Exception or IOException or UnauthorizedAccessException)
+        { RecorderStatusText.Text = $"Deep trace failed to start: {ex.Message}"; }
+    }
+
+    // Saves the deep-trace buffer beside the recording and attaches it. With restart a new buffer covers the next problem.
+    private async Task SaveTraceAsync(string suffix, string reason, bool restart)
+    {
+        if (_recorder.FilePath is not { } session || !_trace.IsRecording) return;
+        var path = Path.ChangeExtension(session, null) + $".{suffix}.etl";
+        RecorderStatusText.Text = "Saving deep trace…";
+        try
+        {
+            var (saved, message) = await _trace.SaveAsync(path, $"Skald: {reason}", restart);
+            if (saved is not null) _recorder.AddTrace(new SessionTrace(Path.GetFileName(saved), DateTimeOffset.UtcNow, reason, new FileInfo(saved).Length));
+            RecorderStatusText.Text = saved is null ? message : $"{message} {Path.GetFileName(saved)}";
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or Win32Exception or IOException or UnauthorizedAccessException)
+        { RecorderStatusText.Text = $"Deep trace could not be saved: {ex.Message}"; }
+    }
+
+    // A trace still running from an earlier run that closed or crashed holds whatever led up to that; save it rather than lose it.
+    private async Task SaveLeftoverTraceAsync()
+    {
+        if (!_trace.IsRecording) return;
+        if (!WindowsTraceCapture.IsElevated)
+        {
+            RecorderStatusText.Text = "A deep trace from an earlier Skald run may still be running. Restart Skald as administrator to save it.";
+            return;
+        }
+        var path = Path.Combine(SessionLocations.RecordingsDirectory, $"Skald_{DateTime.Now.ToString("yyyyMMdd_HHmmss_fff", CultureInfo.InvariantCulture)}.leftover.etl");
+        try
+        {
+            var (saved, message) = await _trace.SaveAsync(path, "Skald: trace left running by an earlier run", restart: false);
+            RecorderStatusText.Text = saved is null ? message : $"Saved a deep trace left running by an earlier Skald run: {Path.GetFileName(saved)}";
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or Win32Exception or IOException or UnauthorizedAccessException)
+        { RecorderStatusText.Text = $"Could not save a deep trace left by an earlier run: {ex.Message}"; }
     }
 
     private void StartTimedPowerRecording()
@@ -279,7 +369,7 @@ public sealed partial class MainWindow : Window, IDisposable
                 : "The 30-minute power recording is already in progress.");
             return;
         }
-        RecordButton_Click(RecordButton, new RoutedEventArgs());
+        StartRecording();
         _powerRecordingStopAt = DateTimeOffset.UtcNow.AddMinutes(30);
         _powerPage.SetRecordingStatus("Recording scheduled to save automatically after 30 minutes. You can stop it earlier with the main Record button.");
     }
@@ -292,13 +382,22 @@ public sealed partial class MainWindow : Window, IDisposable
         MarkerButton.IsEnabled = false;
         try
         {
+            RecorderStatusText.Text = "Saving recording…";
+            if (_traceSave is { } pending) await pending;
+            if (_trace.IsRecording) await SaveTraceAsync("end", "End of recording", restart: false);
+            if (_machineTask is { IsCompleted: false } machine) await Task.WhenAny(machine, Task.Delay(TimeSpan.FromSeconds(15)));
+            if (_machineTask is { IsCompletedSuccessfully: true } done) _recorder.SetMachine(done.Result);
+            RecorderStatusText.Text = "Saving recording and the Windows reports from its time window…";
             string? savedPath;
-            try { savedPath = await _recorder.StopAsync(); }
+            try { savedPath = await _recorder.StopAsync(CollectWindowsEvidence); }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
                 RecorderStatusText.Text = $"Could not save recording: {ex.Message}. Press Stop to retry.";
                 return false;
             }
+            _markerStopAt = null;
+            _machineTask = null;
+            _traceSave = null;
             _recordingsPage.SetActiveRecordingPath(null);
             RecordButton.Content = "● Record";
             _recordingsPage.SetRecording(false);
@@ -317,40 +416,78 @@ public sealed partial class MainWindow : Window, IDisposable
     private async void MarkerButton_Click(object sender, RoutedEventArgs e)
     {
         if (_isStoppingRecording) return;
-        if (!_recorder.IsRecording) StartRecording();
+        var started = !_recorder.IsRecording;
+        if (started) StartRecording();
         _recorder.AddMarker();
+        // A recording that only exists because of Mark Problem keeps 5 minutes before (pre-roll) and 2 minutes after the last marker.
+        if (started || _markerStopAt is not null) _markerStopAt = DateTimeOffset.UtcNow + MarkerTail;
         RecorderStatusText.Text = "Saving marked incident…";
         try
         {
-            await _trace.MarkAsync();
+            await _trace.MarkAsync("Skald: problem marked");
+            if (_trace.IsRecording && _traceSave is null or { IsCompleted: true })
+                _traceSave = SaveTraceAsync($"marker{++_traceCount}", $"Problem marker {_recorder.MarkerCount}", restart: true);
             await _recorder.CheckpointAsync();
             await _recordingsPage.RefreshSessionsAsync();
-            RecorderStatusText.Text = $"Problem marked · {_recorder.SampleCount} samples · saved checkpoint";
+            if (!_trace.IsSaving)
+                RecorderStatusText.Text = $"Problem marked · {_recorder.SampleCount} samples · saved checkpoint" + (started ? " · saves 2 minutes after the last marker" : string.Empty);
         }
         catch (Exception ex) { RecorderStatusText.Text = $"Problem marked, but checkpoint failed: {ex.Message}"; }
     }
 
-    private async void DeepTrace_Click()
+    private void RecordMenu_Opening(object sender, object e)
     {
-        _recordingsPage.SetDeepTraceBusy();
+        var elevated = WindowsTraceCapture.IsElevated;
+        var recording = _recorder.IsRecording;
+        DeepTraceToggle.IsChecked = _preferences.IncludeDeepTrace;
+        DeepTraceToggle.IsEnabled = elevated && _trace.IsAvailable && !recording;
+        DeepTraceNote.Text = !_trace.IsAvailable ? "Windows Performance Recorder (wpr.exe) is not installed"
+            : !elevated ? "Deep trace needs Skald running as administrator"
+            : recording ? (_trace.IsRecording ? "Deep trace is running for this recording" : "Deep trace applies to the next recording")
+            : "Saves the last minute of system activity at each marker (ETL)";
+        RestartElevatedItem.Visibility = elevated ? Visibility.Collapsed : Visibility.Visible;
+        TimedPowerItem.IsEnabled = !recording;
+    }
+
+    private void DeepTraceToggle_Click(object sender, RoutedEventArgs e)
+    {
+        _preferences.IncludeDeepTrace = DeepTraceToggle.IsChecked;
+        _preferences.Save();
+    }
+
+    private void RestartElevated_Click(object sender, RoutedEventArgs e)
+    {
+        if (_recorder.IsRecording)
+        {
+            RecorderStatusText.Text = "Stop the recording before restarting Skald as administrator.";
+            return;
+        }
         try
         {
-            var message = _trace.IsRecording ? await _trace.StopAsync() : await _trace.StartAsync();
-            _recordingsPage.SetDeepTraceStatus(_trace.IsRecording, message);
+            Process.Start(new ProcessStartInfo(Environment.ProcessPath!) { UseShellExecute = true, Verb = "runas" })?.Dispose();
+            Close();
         }
-        catch (Exception ex)
-        {
-            _recordingsPage.SetDeepTraceStatus(_trace.IsRecording, $"Deep trace failed: {ex.Message}");
-        }
+        catch (Win32Exception) { RecorderStatusText.Text = "Skald was not restarted as administrator."; }
     }
+
+    private void TimedPower_Click(object sender, RoutedEventArgs e) => StartTimedPowerRecording();
+
+    private void OpenRecordingsFolder_Click(object sender, RoutedEventArgs e) => _recordingsPage.OpenRecordingsFolder();
 
     private void MainWindow_Closed(object sender, WindowEventArgs args) => Dispose();
 
     public void Dispose()
     {
         _timer.Stop();
-        if (_recorder.IsRecording) _recorder.StopAsync().GetAwaiter().GetResult();
+        // The deep-trace buffer is discarded rather than left running in the kernel with nobody to save it.
+        _trace.Cancel();
+        if (_recorder.IsRecording)
+        {
+            if (_machineTask is { IsCompletedSuccessfully: true } machine) _recorder.SetMachine(machine.Result);
+            _recorder.StopAsync(CollectWindowsEvidence).GetAwaiter().GetResult();
+        }
         _recorder.Dispose();
+        _trace.Dispose();
         _collector.Dispose();
     }
 }

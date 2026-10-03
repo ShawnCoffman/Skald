@@ -1,11 +1,24 @@
 <Page x:Class="Skald.App.Pages.UpdatesPage" xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" Background="#0B151D" Loaded="Page_Loaded">
  <ScrollViewer><StackPanel Padding="28,22,28,28" Spacing="14">
   <TextBlock Text="Windows updates &amp; changes" FontSize="27" FontWeight="SemiBold"/>
-  <TextBlock Text="The latest 50 Windows Update Agent history entries, including failed installs and uninstallations." Foreground="#98AEB9" TextWrapping="Wrap"/>
-  <StackPanel Orientation="Horizontal" Spacing="10"><Button x:Name="RefreshButton" Content="Refresh" Click="Refresh_Click"/><CheckBox x:Name="FailuresOnly" Content="Failures only" Checked="Filter_Changed" Unchecked="Filter_Changed"/></StackPanel>
+  <TextBlock Text="Windows Update Agent history, including Defender definition updates, failed installs and uninstallations. Repeats of the same update and outcome are shown once with a count." Foreground="#98AEB9" TextWrapping="Wrap"/>
+  <StackPanel Orientation="Horizontal" Spacing="10">
+   <ComboBox x:Name="RangePicker" Header="Show" SelectedIndex="3" SelectionChanged="Range_Changed" MinWidth="130">
+    <x:String>Last 1 day</x:String>
+    <x:String>Last 3 days</x:String>
+    <x:String>Last 7 days</x:String>
+    <x:String>Last 14 days</x:String>
+    <x:String>Last 30 days</x:String>
+    <x:String>All history</x:String>
+   </ComboBox>
+   <CheckBox x:Name="FailuresOnly" Content="Failures only" Checked="Filter_Changed" Unchecked="Filter_Changed" VerticalAlignment="Bottom"/>
+   <Button x:Name="RefreshButton" Content="Refresh" Click="Refresh_Click" VerticalAlignment="Bottom"/>
+  </StackPanel>
   <TextBlock x:Name="StatusText" Text="Loading update history…" Foreground="#9ED8CA" TextWrapping="Wrap"/>
+  <TextBlock x:Name="CoverageText" Foreground="#D9B27C" TextWrapping="Wrap" Visibility="Collapsed"/>
   <Border Background="#14222B" CornerRadius="10" Padding="16"><StackPanel Spacing="8"><TextBlock Text="Update state" FontSize="17" FontWeight="SemiBold"/><TextBlock x:Name="StateText" Text="Checking…" TextWrapping="Wrap" IsTextSelectionEnabled="True"/></StackPanel></Border>
-  <ListView x:Name="UpdatesList" MaxHeight="700" HorizontalContentAlignment="Stretch"><ListView.ItemTemplate><DataTemplate><StackPanel Padding="4,8" Spacing="4"><TextBlock Text="{Binding Title}" TextWrapping="Wrap" FontWeight="SemiBold"/><TextBlock Text="{Binding Detail}" Foreground="#98AEB9" FontSize="12" TextWrapping="Wrap"/></StackPanel></DataTemplate></ListView.ItemTemplate></ListView>
+  <ListView x:Name="UpdatesList" MaxHeight="700" HorizontalContentAlignment="Stretch"><ListView.ItemTemplate><DataTemplate><StackPanel Padding="4,8" Spacing="4"><TextBlock Text="{Binding Title}" TextWrapping="Wrap" FontWeight="SemiBold" IsTextSelectionEnabled="True"/><TextBlock Text="{Binding Detail}" Foreground="#98AEB9" FontSize="12" TextWrapping="Wrap" IsTextSelectionEnabled="True"/></StackPanel></DataTemplate></ListView.ItemTemplate></ListView>
+  <TextBlock Text="Not listed here: drivers installed by OEM tools or by hand, and BIOS updates. Check hardware compares the driver list, BIOS version and Windows build with its previous scan or a saved baseline." Foreground="#98AEB9" FontSize="12" TextWrapping="Wrap"/>
   <TextBlock x:Name="SourcesText" Foreground="#D9B27C" TextWrapping="Wrap"/>
  </StackPanel></ScrollViewer>
 </Page>

@@ -34,7 +34,7 @@ public static class TriageScanner
         var systemTask = Guard(SystemInventoryCollector.CollectAsync(includeApplications: false), "System inventory", status);
         var driversTask = Guard(DriverInventoryCollector.CollectAsync(), "Driver inventory", status);
         var dumpsTask = Guard(CrashDumpCollector.CollectAsync(), "Crash dumps", status);
-        var updatesTask = Guard(WindowsUpdateCollector.CollectAsync(maxEntries: 200), "Windows Update", status);
+        var updatesTask = Guard(WindowsUpdateCollector.CollectAsync(since: now.AddDays(-options.WindowDays)), "Windows Update", status);
 
         // Collectors cannot be interrupted, but the caller can stop waiting for them.
         var reliability = await reliabilityTask.WaitAsync(cancellationToken).ConfigureAwait(false);
