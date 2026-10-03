@@ -21,6 +21,8 @@ public sealed partial class MainWindow : Window, IDisposable
     private readonly FlightRecorder _recorder = new();
     private readonly WindowsTraceCapture _trace = new();
     private readonly DispatcherQueueTimer _timer;
+    private readonly HomePage _homePage = new();
+    private readonly TriagePage _triagePage = new();
     private readonly SummaryPage _summaryPage = new();
     private readonly PerformancePage _performancePage = new();
     private readonly PowerPage _powerPage = new();
@@ -46,16 +48,19 @@ public sealed partial class MainWindow : Window, IDisposable
         AppWindow.SetIcon(Path.Combine(AppContext.BaseDirectory, "Assets", "Skald.ico"));
         var workArea = DisplayArea.GetFromWindowId(AppWindow.Id, DisplayAreaFallback.Primary).WorkArea;
         AppWindow.Resize(new SizeInt32(Math.Min(1380, workArea.Width), Math.Min(900, workArea.Height)));
-        ContentFrame.Content = _summaryPage;
-        _activePage = _summaryPage;
+        ContentFrame.Content = _homePage;
+        _activePage = _homePage;
         RootNavigation.SelectedItem = RootNavigation.MenuItems[0];
-        _summaryPage.NavigateRequested += tag =>
+        void Navigate(string tag)
         {
-            var item = RootNavigation.MenuItems.OfType<NavigationViewItem>().FirstOrDefault(candidate => candidate.Tag as string == tag)
-                ?? RootNavigation.MenuItems.OfType<NavigationViewItem>().SelectMany(candidate => candidate.MenuItems.OfType<NavigationViewItem>()).FirstOrDefault(candidate => candidate.Tag as string == tag);
-            if (item is not null) RootNavigation.SelectedItem = item;
-        };
-        void OpenProcesses() => RootNavigation.SelectedItem = RootNavigation.MenuItems.OfType<NavigationViewItem>().First(item => item.Tag as string == "processes");
+            if (FindNavigationItem(RootNavigation.MenuItems, tag) is { } item) RootNavigation.SelectedItem = item;
+        }
+        _summaryPage.NavigateRequested += Navigate;
+        _homePage.NavigateRequested += Navigate;
+        _triagePage.NavigateRequested += Navigate;
+        _homePage.RunHardwareCheckRequested += async () => await _triagePage.RunAsync();
+        _homePage.AnalyzeRequested += AnalyzePerformance;
+        void OpenProcesses() => Navigate("processes");
         _cpuPage.ProcessesRequested += OpenProcesses;
         _memoryPage.ProcessesRequested += OpenProcesses;
         _gpuPage.ProcessesRequested += OpenProcesses;
@@ -69,6 +74,37 @@ public sealed partial class MainWindow : Window, IDisposable
         _timer.Tick += Timer_Tick;
         _timer.Start();
         Closed += MainWindow_Closed;
+        _ = RecoverInterruptedRecordingsAsync();
+    }
+
+    private static string SessionsDirectory()
+    {
+        var documents = Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
+        return Path.Combine(string.IsNullOrWhiteSpace(documents) ? AppContext.BaseDirectory : documents, "Skald Sessions");
+    }
+
+    // A recording that was running when the app, Windows or the power died leaves a journal behind; turn it back into a session.
+    private async Task RecoverInterruptedRecordingsAsync()
+    {
+        try
+        {
+            var recovered = 0;
+            var failed = 0;
+            foreach (var journal in FlightRecorder.FindInterruptedJournals(SessionsDirectory()))
+            {
+                // One damaged journal must not stop the others from being recovered.
+                try { if (await FlightRecorder.RecoverAsync(journal) is not null) recovered++; }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Text.Json.JsonException or InvalidDataException) { failed++; }
+            }
+            if (recovered == 0 && failed == 0) return;
+            RecorderStatusText.Text = (recovered > 0 ? $"Recovered {recovered} interrupted recording{(recovered == 1 ? string.Empty : "s")}" : string.Empty)
+                + (failed > 0 ? $"{(recovered > 0 ? " · " : string.Empty)}{failed} interrupted recording(s) could not be recovered" : string.Empty);
+            if (recovered > 0) await _recordingsPage.RefreshSessionsAsync();
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            RecorderStatusText.Text = $"Could not look for interrupted recordings: {ex.Message}";
+        }
     }
 
     private async void Timer_Tick(DispatcherQueueTimer sender, object args)
@@ -115,6 +151,7 @@ public sealed partial class MainWindow : Window, IDisposable
         using var scroll = _activePage is Page visiblePage ? ScrollPositionKeeper.Capture(visiblePage) : null;
         switch (_activePage)
         {
+            case HomePage page: page.ShowHistory(history); break;
             case SummaryPage page: page.ShowHistory(history, findings); break;
             case PerformancePage page: page.ShowHistory(history); break;
             case PowerPage page: page.ShowHistory(history); break;
@@ -134,12 +171,24 @@ public sealed partial class MainWindow : Window, IDisposable
     }
 
 
+    private static NavigationViewItem? FindNavigationItem(IEnumerable<object> items, string tag)
+    {
+        foreach (var item in items.OfType<NavigationViewItem>())
+        {
+            if (item.Tag as string == tag) return item;
+            if (FindNavigationItem(item.MenuItems, tag) is { } nested) return nested;
+        }
+        return null;
+    }
+
     private void RootNavigation_SelectionChanged(NavigationView sender, NavigationViewSelectionChangedEventArgs args)
     {
         if (args.SelectedItem is not NavigationViewItem item || item.Tag is not string tag) return;
 
         _activePage = tag switch
         {
+            "home" => _homePage,
+            "triage" => _triagePage,
             "summary" => _summaryPage,
             "performance" => _performancePage,
             "cpu" => _cpuPage,
@@ -154,7 +203,7 @@ public sealed partial class MainWindow : Window, IDisposable
             "hardware" => _hardwarePage,
             "recorder" => new RecorderPage(),
             "sessions" => _recordingsPage,
-            _ => _summaryPage
+            _ => _homePage
         };
 
         ContentFrame.Content = _activePage;
@@ -205,8 +254,7 @@ public sealed partial class MainWindow : Window, IDisposable
 
     private void StartRecording()
     {
-        var documents = Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
-        var directory = Path.Combine(string.IsNullOrWhiteSpace(documents) ? AppContext.BaseDirectory : documents, "Skald Sessions");
+        var directory = SessionsDirectory();
         var fileName = $"Skald_{DateTime.Now.ToString("yyyyMMdd_HHmmss_fff", CultureInfo.InvariantCulture)}.perfsession";
         var path = Path.Combine(directory, fileName);
         var history = _rollingBuffer.GetSnapshot();
@@ -219,6 +267,11 @@ public sealed partial class MainWindow : Window, IDisposable
 
     private void StartTimedPowerRecording()
     {
+        if (_isStoppingRecording)
+        {
+            _powerPage.SetRecordingStatus("The previous recording is still being saved. Try again in a moment.");
+            return;
+        }
         if (_recorder.IsRecording)
         {
             _powerPage.SetRecordingStatus(_powerRecordingStopAt is null
@@ -236,6 +289,7 @@ public sealed partial class MainWindow : Window, IDisposable
         if (_isStoppingRecording) return false;
         _isStoppingRecording = true;
         RecordButton.IsEnabled = false;
+        MarkerButton.IsEnabled = false;
         try
         {
             string? savedPath;
@@ -255,12 +309,14 @@ public sealed partial class MainWindow : Window, IDisposable
         finally
         {
             RecordButton.IsEnabled = true;
+            MarkerButton.IsEnabled = true;
             _isStoppingRecording = false;
         }
     }
 
     private async void MarkerButton_Click(object sender, RoutedEventArgs e)
     {
+        if (_isStoppingRecording) return;
         if (!_recorder.IsRecording) StartRecording();
         _recorder.AddMarker();
         RecorderStatusText.Text = "Saving marked incident…";

@@ -1,6 +1,6 @@
 using System.Management;
 
-namespace Skald.Collectors;
+namespace Skald.Triage;
 
 public static class StorageHealthCollector
 {

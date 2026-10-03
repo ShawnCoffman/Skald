@@ -19,6 +19,7 @@ public sealed class WindowsMetricsCollector : ISystemMetricsCollector, IDisposab
     private readonly BatteryTelemetryCollector _batteryTelemetry = new();
     private readonly WindowsCpuDetailCollector _cpuDetailCollector = new();
     private readonly HardwareSensorCollector _hardwareSensors = new();
+    private readonly ThermalZoneCollector _thermalZones = new();
     private readonly PhysicalDiskCollector _physicalDisks = new();
     private readonly Dictionary<ProcessIdentity, ProcessState> _previousProcesses = [];
     private readonly Dictionary<string, NetworkState> _previousNetwork = [];
@@ -80,7 +81,7 @@ public sealed class WindowsMetricsCollector : ISystemMetricsCollector, IDisposab
             GpuDevices = gpuDevices,
             GpuEngines = GpuEngineCollector.Aggregate(gpuEngines),
             GpuEnginesAvailable = gpuEngines is not null,
-            Sensors = _powerTelemetryCollector.Sample().Concat(_hardwareSensors.Sample()).ToArray()
+            Sensors = _powerTelemetryCollector.Sample().Concat(_hardwareSensors.Sample()).Concat(_thermalZones.Sample()).ToArray()
         };
     }
 
@@ -99,6 +100,7 @@ public sealed class WindowsMetricsCollector : ISystemMetricsCollector, IDisposab
         _gpuMemoryCollector.Dispose();
         _nvidiaGpuCollector.Dispose();
         _powerTelemetryCollector.Dispose();
+        _thermalZones.Dispose();
         _cpuDetailCollector.Dispose();
     }
 

@@ -8,7 +8,12 @@ public sealed record ReliabilityEvent(DateTimeOffset Timestamp, string Log, long
     public string DisplayTime => Timestamp.ToLocalTime().ToString("g", System.Globalization.CultureInfo.CurrentCulture);
 }
 
-public sealed record ReliabilityHistory(DateTimeOffset CollectedAt, IReadOnlyList<ReliabilityEvent> Events, IReadOnlyList<string> SourceStatus);
+public sealed record ReliabilityHistory(DateTimeOffset CollectedAt, IReadOnlyList<ReliabilityEvent> Events, IReadOnlyList<string> SourceStatus)
+{
+    // Log name -> timestamp of the oldest record read, for logs where the scan cap stopped reading before the 30-day cutoff.
+    // Anything older than that timestamp was never examined, so "nothing found" only covers the time after it.
+    public IReadOnlyDictionary<string, DateTimeOffset> TruncatedAt { get; init; } = new Dictionary<string, DateTimeOffset>();
+}
 
 public static class ReliabilityAnalysis
 {
@@ -26,11 +31,13 @@ public static class ReliabilityAnalysis
         if (provider.Equals("Application Error", StringComparison.OrdinalIgnoreCase) || provider.Equals("Application Hang", StringComparison.OrdinalIgnoreCase)
             || provider.Equals(".NET Runtime", StringComparison.OrdinalIgnoreCase)) return "Applications";
         if (provider.Equals("Display", StringComparison.OrdinalIgnoreCase) || provider.Contains("nvlddmkm", StringComparison.OrdinalIgnoreCase)
-            || provider.Contains("amdkmd", StringComparison.OrdinalIgnoreCase) || provider.Equals("disk", StringComparison.OrdinalIgnoreCase)
-            || provider.Contains("storahci", StringComparison.OrdinalIgnoreCase) || provider.Contains("stornvme", StringComparison.OrdinalIgnoreCase)
-            || provider.Contains("storport", StringComparison.OrdinalIgnoreCase) || provider.Contains("Ntfs", StringComparison.OrdinalIgnoreCase)
+            || provider.Contains("amdkmd", StringComparison.OrdinalIgnoreCase) || provider.Contains("igfx", StringComparison.OrdinalIgnoreCase)
+            || StorageIncidentAnalysis.IsStorageProvider(provider) || provider.Contains("Ntfs", StringComparison.OrdinalIgnoreCase)
             || provider.Contains("Kernel-PnP", StringComparison.OrdinalIgnoreCase) || provider.Contains("DriverFrameworks", StringComparison.OrdinalIgnoreCase)) return "Drivers & storage";
         if (provider.Equals("MsiInstaller", StringComparison.OrdinalIgnoreCase) || provider.Contains("WindowsUpdateClient", StringComparison.OrdinalIgnoreCase)) return "Changes";
+        // Event 37: a processor is being limited by system firmware. Other Kernel-Processor-Power events are routine.
+        if ((provider.Equals("Microsoft-Windows-Kernel-Processor-Power", StringComparison.OrdinalIgnoreCase) && eventId == 37)
+            || (provider.Equals("Microsoft-Windows-MemoryDiagnostics-Results", StringComparison.OrdinalIgnoreCase) && eventId is 1201 or 1202)) return "Firmware & diagnostics";
         return null;
     }
 
@@ -38,6 +45,7 @@ public static class ReliabilityAnalysis
     {
         "Crashes & restarts" when item.EventId is 41 or 6008 => "Windows recorded an unclean shutdown. This alone does not identify a power-supply, driver, or hardware fault. The timestamp may be when the next boot logged the report; inspect the details for the earlier shutdown time.",
         "Hardware" => "A Windows hardware-error report. Inspect the record for corrected versus uncorrected status and the affected component; severity alone does not establish the failing part.",
+        "Firmware & diagnostics" => "Either Windows reported that system firmware is limiting a processor (a power or thermal limit set by the BIOS/EC), or it recorded the result of a Windows Memory Diagnostic run. Neither names a failing part on its own.",
         "Changes" => "An installation or update report. A nearby failure is a timing correlation, not proof that this change caused it.",
         _ => "Windows reported this event. Repeated reports can help identify a pattern; the source details remain the evidence. Related events can describe the same underlying incident."
     };

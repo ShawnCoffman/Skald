@@ -1,4 +1,5 @@
 using Skald.Collectors;
+using Skald.Triage;
 using Skald.Core.Models;
 using Xunit;
 using Xunit.Abstractions;

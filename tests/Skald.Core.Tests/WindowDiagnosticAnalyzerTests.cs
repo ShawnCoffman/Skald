@@ -32,6 +32,30 @@ public sealed class WindowDiagnosticAnalyzerTests
         Assert.DoesNotContain(WindowDiagnosticAnalyzer.Analyze(samples), finding => finding.Title == "Sustained CPU saturation");
     }
 
+    [Fact]
+    public void ReportsSustainedPlatformThermalLimitButNotWhenUnlimited()
+    {
+        var start = DateTimeOffset.UtcNow.AddMinutes(-1);
+        SensorMetric Limit(string kind, double value) => new($"windows/thermal-zone/TZ00/{kind}", "TZ00", kind, "Limit", "%", value, "test", "Thermal limit");
+        var limited = Enumerable.Range(0, 20).Select(index => Snapshot(start.AddSeconds(index * 2)) with { Sensors = [Limit("passive-limit", 70), Limit("throttle-reasons", 0)] }).ToArray();
+        var finding = Assert.Single(WindowDiagnosticAnalyzer.Analyze(limited), item => item.Title.StartsWith("Platform thermal limit", StringComparison.Ordinal));
+        Assert.Contains("TZ00", finding.Title, StringComparison.Ordinal);
+        var unlimited = limited.Select(sample => sample with { Sensors = [Limit("passive-limit", 100), Limit("throttle-reasons", 0)] }).ToArray();
+        Assert.DoesNotContain(WindowDiagnosticAnalyzer.Analyze(unlimited), item => item.Title.StartsWith("Platform thermal limit", StringComparison.Ordinal));
+        var reasons = limited.Select(sample => sample with { Sensors = [Limit("passive-limit", 100), Limit("throttle-reasons", 4)] }).ToArray();
+        Assert.Contains(WindowDiagnosticAnalyzer.Analyze(reasons), item => item.Title.StartsWith("Platform thermal limit", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void EffectiveClockAppearsInSensorCatalogOnlyWhenMeasured()
+    {
+        var measured = Snapshot(DateTimeOffset.UtcNow) with { Cpu = new CpuMetric(10, 8, MetricAvailability.Supported) { EffectiveMegahertz = 4700 } };
+        Assert.Equal(4700, SensorCatalog.GetSensors(measured).Single(sensor => sensor.Id == "cpu/effective/clock").Value);
+        var missing = SensorCatalog.GetSensors(Snapshot(DateTimeOffset.UtcNow));
+        Assert.Null(missing.Single(sensor => sensor.Id == "cpu/effective/unavailable").Value);
+        Assert.DoesNotContain(missing, sensor => sensor.Id == "cpu/effective/clock");
+    }
+
     private static SystemMetricsSnapshot Snapshot(DateTimeOffset time) => new(time,
         new CpuMetric(10, 8, MetricAvailability.Supported),
         new MemoryMetric(16_000, 8_000, 50, MetricAvailability.Supported),

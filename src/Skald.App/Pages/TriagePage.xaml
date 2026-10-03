@@ -1,0 +1,46 @@
+<Page x:Class="Skald.App.Pages.TriagePage"
+ xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+ xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" Background="#0B151D" Loaded="Page_Loaded">
+ <ScrollViewer VerticalScrollBarVisibility="Auto">
+  <StackPanel Padding="28,22,28,28" Spacing="14">
+   <StackPanel Spacing="4">
+    <TextBlock Text="Hardware check" FontSize="27" FontWeight="SemiBold"/>
+    <TextBlock Text="Is it the hardware, a driver or the BIOS? This reads what Windows has already recorded and takes about a minute. It does not stress-test anything." Foreground="#98AEB9" TextWrapping="Wrap"/>
+   </StackPanel>
+   <StackPanel Orientation="Horizontal" Spacing="10">
+    <Button x:Name="RunButton" Content="Run hardware check" Click="Run_Click" Style="{StaticResource AccentButtonStyle}"/>
+    <ComboBox x:Name="WindowPicker" SelectedIndex="2" AutomationProperties.Name="Event window"><ComboBoxItem Content="Last 7 days"/><ComboBoxItem Content="Last 14 days"/><ComboBoxItem Content="Last 30 days"/></ComboBox>
+    <ProgressRing x:Name="Spinner" IsActive="False" Width="22" Height="22"/>
+   </StackPanel>
+   <TextBlock x:Name="StatusText" Text="Not run yet. Press Run hardware check." Foreground="#9ED8CA" TextWrapping="Wrap"/>
+   <StackPanel x:Name="ResultPanel" Spacing="14" Visibility="Collapsed">
+    <Border x:Name="VerdictCard" CornerRadius="10" Padding="20,16">
+     <StackPanel Spacing="8">
+      <TextBlock x:Name="VerdictHeadline" FontSize="22" FontWeight="SemiBold" TextWrapping="Wrap"/>
+      <TextBlock x:Name="VerdictDetail" TextWrapping="Wrap" IsTextSelectionEnabled="True"/>
+     </StackPanel>
+    </Border>
+    <StackPanel Orientation="Horizontal" Spacing="8">
+     <Button Content="Save report" Click="Save_Click"/>
+     <Button Content="Save .zip bundle" Click="SaveZip_Click"/>
+     <Button Content="Copy summary" Click="Copy_Click"/>
+     <Button x:Name="OpenFolderButton" Content="Open folder" Click="OpenFolder_Click" Visibility="Collapsed"/>
+     <ToggleSwitch x:Name="RedactToggle" OnContent="Names removed" OffContent="Keep names" AutomationProperties.Name="Remove computer name, serial number and user names from saved reports"/>
+    </StackPanel>
+    <TextBlock x:Name="SaveStatus" Foreground="#9ED8CA" TextWrapping="Wrap" FontSize="12"/>
+    <StackPanel x:Name="ChecksPanel" Spacing="8"/>
+    <Expander Header="Not covered by this scan" HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch"><TextBlock x:Name="NotCoveredText" TextWrapping="Wrap" IsTextSelectionEnabled="True"/></Expander>
+    <Expander Header="Machine" HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch"><TextBlock x:Name="MachineText" TextWrapping="Wrap" IsTextSelectionEnabled="True"/></Expander>
+    <Expander Header="Sources and coverage" HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch"><TextBlock x:Name="SourcesText" TextWrapping="Wrap" IsTextSelectionEnabled="True" Foreground="#D9B27C" FontSize="12"/></Expander>
+    <StackPanel Spacing="6">
+     <TextBlock Text="Underlying details" FontSize="16" FontWeight="SemiBold"/>
+     <StackPanel Orientation="Horizontal" Spacing="8">
+      <Button Content="Devices &amp; drivers" Click="Hardware_Click"/>
+      <Button Content="Reliability &amp; events" Click="Reliability_Click"/>
+      <Button Content="Windows updates" Click="Updates_Click"/>
+     </StackPanel>
+    </StackPanel>
+   </StackPanel>
+  </StackPanel>
+ </ScrollViewer>
+</Page>

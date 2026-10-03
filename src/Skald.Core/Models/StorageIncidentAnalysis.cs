@@ -6,17 +6,24 @@ public sealed record StorageEventLink(uint? DiskNumber, string Description, Hard
 
 public static partial class StorageIncidentAnalysis
 {
+    // Inbox storage stack plus common vendor port/miniport drivers (Intel RST/VMD, AMD RAID, LSI/Broadcom, vendor NVMe, Storage Spaces).
+    private static readonly string[] StorageDrivers =
+        ["storahci", "stornvme", "storport", "iaStor", "nvme", "atapi", "amdsata", "amdsbs", "rcraid", "megasas", "lsi_sa", "percsas", "storvsc", "spaceport"];
+
+    public static bool IsStorageProvider(string provider)
+        => provider.Equals("disk", StringComparison.OrdinalIgnoreCase) || StorageDrivers.Any(name => provider.Contains(name, StringComparison.OrdinalIgnoreCase));
+
     public static StorageEventLink? Link(ReliabilityEvent item)
     {
-        if (!item.Provider.Equals("disk", StringComparison.OrdinalIgnoreCase)
-            && !item.Provider.Contains("storport", StringComparison.OrdinalIgnoreCase)
-            && !item.Provider.Contains("stornvme", StringComparison.OrdinalIgnoreCase)
-            && !item.Provider.Contains("storahci", StringComparison.OrdinalIgnoreCase)) return null;
-        if (item.EventId is not (7 or 11 or 51 or 129 or 153 or 157)) return null;
+        if (!IsStorageProvider(item.Provider)) return null;
+        if (item.EventId is not (7 or 9 or 11 or 15 or 51 or 52 or 129 or 153 or 157)) return null;
 
         var description = item.EventId switch
         {
             7 => "Bad block report",
+            9 => "Device timeout",
+            15 => "Device not ready",
+            52 => "Predicted failure (SMART)",
             11 => "Controller error report",
             51 => "Paging I/O error",
             129 => "Storage request timeout/reset",

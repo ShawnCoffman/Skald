@@ -3,7 +3,7 @@ using System.Management;
 using System.Net.NetworkInformation;
 using Skald.Core.Models;
 
-namespace Skald.Collectors;
+namespace Skald.Triage;
 
 public static class HardwareInventoryCollector
 {
@@ -11,9 +11,9 @@ public static class HardwareInventoryCollector
     internal const string CimNamespace = @"root\CIMV2";
     internal const string BatteryNamespace = @"root\wmi";
 
-    public static Task<HardwareInventory> CollectAsync() => Task.Run(Collect);
+    public static Task<HardwareInventory> CollectAsync(ReliabilityHistory? reliability = null) => Task.Run(() => Collect(reliability));
 
-    private static HardwareInventory Collect()
+    private static HardwareInventory Collect(ReliabilityHistory? suppliedReliability)
     {
         var status = new List<string>();
         var devices = new List<HardwareDeviceBuilder>();
@@ -29,7 +29,7 @@ public static class HardwareInventoryCollector
         var unmapped = new List<HardwareSignal>();
         try
         {
-            var reliability = WindowsReliabilityCollector.CollectAsync().GetAwaiter().GetResult();
+            var reliability = suppliedReliability ?? WindowsReliabilityCollector.CollectAsync().GetAwaiter().GetResult();
             var currentBoot = DateTimeOffset.UtcNow - TimeSpan.FromMilliseconds(Environment.TickCount64) - TimeSpan.FromMinutes(5);
             var disksByNumber = devices.Where(device => device.WindowsDiskNumber.HasValue)
                 .ToLookup(device => device.WindowsDiskNumber!.Value);

@@ -4,10 +4,13 @@ using System.Management;
 using System.Xml.Linq;
 using Skald.Core.Models;
 
-namespace Skald.Collectors;
+namespace Skald.Triage;
 
 public static class WindowsReliabilityCollector
 {
+    // Uncategorized records are skipped before their message is formatted, so a high cap mostly costs enumeration time.
+    private const int ScanCap = 20000;
+
     public static Task<ReliabilityHistory> CollectAsync() => Task.Run(Collect);
 
     private static ReliabilityHistory Collect()
@@ -17,31 +20,42 @@ public static class WindowsReliabilityCollector
         var events = new List<ReliabilityEvent>();
         var status = new List<string>();
         var nativeLogs = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var truncated = new Dictionary<string, DateTimeOffset>(StringComparer.OrdinalIgnoreCase);
         foreach (var log in new[] { "System", "Application" })
         {
             var read = 0;
+            var skipped = 0;
+            DateTimeOffset? oldest = null;
             try
             {
-                var query = new EventLogQuery(log, PathType.LogName, "*[System[TimeCreated[timediff(@SystemTime) <= 2592000000] and (Level=1 or Level=2 or Level=3 or Provider[@Name='Microsoft-Windows-WindowsUpdateClient'] or Provider[@Name='MsiInstaller'] or Provider[@Name='Windows Error Reporting'] or Provider[@Name='Microsoft-Windows-WHEA-Logger'])]]") { ReverseDirection = true };
+                var query = new EventLogQuery(log, PathType.LogName, "*[System[TimeCreated[timediff(@SystemTime) <= 2592000000] and (Level=1 or Level=2 or Level=3 or Provider[@Name='Microsoft-Windows-WindowsUpdateClient'] or Provider[@Name='MsiInstaller'] or Provider[@Name='Windows Error Reporting'] or Provider[@Name='Microsoft-Windows-WHEA-Logger'] or Provider[@Name='Microsoft-Windows-MemoryDiagnostics-Results'])]]") { ReverseDirection = true };
                 using var reader = new EventLogReader(query);
-                while (read < 5000)
+                while (read < ScanCap)
                 {
                     using var record = reader.ReadEvent(TimeSpan.FromSeconds(5));
                     if (record is null) break;
                     read++;
+                    if (record.TimeCreated is { } seen) oldest = new DateTimeOffset(seen);
                     var provider = record.ProviderName ?? "Unknown";
                     var category = ReliabilityAnalysis.Category(provider, record.Id);
                     if (category is null || record.TimeCreated is not { } created) continue;
-                    var raw = record.ToXml();
-                    var component = Component(raw, provider);
-                    string message;
-                    try { message = record.FormatDescription() ?? "No formatted message available. See raw event XML."; }
-                    catch (EventLogException) { message = "Message resources unavailable. See raw event XML."; }
-                    events.Add(new(new DateTimeOffset(created), log, record.RecordId ?? 0, provider, record.Id, category,
-                        record.Level switch { 1 => "Critical", 2 => "Error", 3 => "Warning", _ => "Information" }, component,
-                        FirstLine(message, provider, record.Id), message, raw));
+                    // One unreadable record is skipped and counted; it must not abort the whole log.
+                    try
+                    {
+                        var raw = record.ToXml();
+                        var component = Component(raw, provider);
+                        string message;
+                        try { message = record.FormatDescription() ?? "No formatted message available. See raw event XML."; }
+                        catch (EventLogException) { message = "Message resources unavailable. See raw event XML."; }
+                        events.Add(new(new DateTimeOffset(created), log, record.RecordId ?? 0, provider, record.Id, category,
+                            record.Level switch { 1 => "Critical", 2 => "Error", 3 => "Warning", _ => "Information" }, component,
+                            FirstLine(message, provider, record.Id), message, raw));
+                    }
+                    catch (Exception ex) when (ex is EventLogException or System.Xml.XmlException or InvalidOperationException) { skipped++; }
                 }
-                status.Add($"{log}: {read} records scanned{(read == 5000 ? " · limit reached; older records may be omitted" : string.Empty)}");
+                if (skipped > 0) status.Add($"{log}: {skipped} relevant record(s) could not be read and were skipped");
+                if (read == ScanCap && oldest is { } first && first > cutoff) truncated[log] = first;
+                status.Add($"{log}: {read} records scanned{(read == ScanCap ? $" · limit reached; records before {Stamp(oldest)} were not read" : string.Empty)}");
                 nativeLogs.Add(log);
             }
             catch (Exception ex) when (ex is EventLogException or UnauthorizedAccessException or System.Security.SecurityException)
@@ -76,12 +90,16 @@ public static class WindowsReliabilityCollector
         { status.Add($"Reliability history: unavailable / partial ({ex.GetType().Name})"); }
         // Prefer native log records, which include severity and structured data, over their WMI copies.
         var distinct = events.DistinctBy(item => $"{item.Log}|{item.RecordId}|{item.Timestamp.ToUnixTimeSeconds()}", StringComparer.OrdinalIgnoreCase);
-        return new(now, ReliabilityAnalysis.Deduplicate(distinct.Where(item => item.Timestamp >= cutoff && item.Timestamp <= now)), status);
+        return new(now, ReliabilityAnalysis.Deduplicate(distinct.Where(item => item.Timestamp >= cutoff && item.Timestamp <= now)), status) { TruncatedAt = truncated };
+
+        static string Stamp(DateTimeOffset? time) => time?.ToLocalTime().ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture) ?? "the cap";
     }
 
     internal static string Component(string raw, string fallback)
     {
-        var xml = XElement.Parse(raw);
+        XElement xml;
+        try { xml = XElement.Parse(raw); }
+        catch (System.Xml.XmlException) { return fallback; }
         var data = xml.Descendants().Where(element => element.Name.LocalName == "Data").ToArray();
         if (fallback.Equals("Windows Error Reporting", StringComparison.OrdinalIgnoreCase))
         {

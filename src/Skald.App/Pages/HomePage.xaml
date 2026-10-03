@@ -1,0 +1,54 @@
+<Page x:Class="Skald.App.Pages.HomePage"
+ xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+ xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" Background="#0B151D" Loaded="Page_Loaded">
+ <ScrollViewer VerticalScrollBarVisibility="Auto">
+  <StackPanel Padding="28,22,28,28" Spacing="16" SizeChanged="Layout_SizeChanged">
+   <StackPanel Spacing="4">
+    <TextBlock Text="What are you trying to find out?" FontSize="27" FontWeight="SemiBold"/>
+    <TextBlock Text="Two questions, one tool. Start with the hardware check; it takes about a minute and tells you whether to look at the machine or at the application." Foreground="#98AEB9" TextWrapping="Wrap"/>
+   </StackPanel>
+   <Grid x:Name="Cards" ColumnSpacing="14" RowSpacing="14">
+    <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+    <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+    <Border x:Name="HardwareCard" Background="#14222B" CornerRadius="10" Padding="22,18">
+     <StackPanel Spacing="10">
+      <TextBlock Text="1  ·  CHECK HARDWARE" Foreground="#83BEB0" FontSize="11" FontWeight="SemiBold"/>
+      <TextBlock Text="Is it the hardware, a driver or the BIOS?" FontSize="20" FontWeight="SemiBold" TextWrapping="Wrap"/>
+      <TextBlock Text="Crashes and unexpected restarts, WHEA errors, storage, memory, graphics resets, firmware limits, device and driver problems, and what changed recently." Foreground="#A8B8C0" TextWrapping="Wrap" FontSize="13"/>
+      <TextBlock x:Name="HardwareStatus" Text="Not run yet." TextWrapping="Wrap" FontWeight="SemiBold"/>
+      <StackPanel Orientation="Horizontal" Spacing="8">
+       <Button x:Name="RunButton" Content="Run hardware check" Click="Run_Click" Style="{StaticResource AccentButtonStyle}"/>
+       <Button x:Name="ViewButton" Content="View last result" Click="ViewHardware_Click" Visibility="Collapsed"/>
+      </StackPanel>
+     </StackPanel>
+    </Border>
+    <Border x:Name="SlowCard" Grid.Column="1" Background="#14222B" CornerRadius="10" Padding="22,18">
+     <StackPanel Spacing="10">
+      <TextBlock Text="2  ·  INVESTIGATE SLOWNESS" Foreground="#E3BA7E" FontSize="11" FontWeight="SemiBold"/>
+      <TextBlock Text="Why is it slow, hot, or freezing right now?" FontSize="20" FontWeight="SemiBold" TextWrapping="Wrap"/>
+      <TextBlock Text="Live CPU, memory, disk, GPU and network; the processes behind them; and a recorder you can replay after the problem has passed." Foreground="#A8B8C0" TextWrapping="Wrap" FontSize="13"/>
+      <TextBlock x:Name="LiveStatus" Text="Collecting telemetry…" TextWrapping="Wrap" FontWeight="SemiBold"/>
+      <StackPanel Orientation="Horizontal" Spacing="8">
+       <Button Content="Open live view" Click="Live_Click"/>
+       <Button Content="Analyze performance" Click="Analyze_Click"/>
+      </StackPanel>
+      <TextBlock Text="Record and Mark Problem are in the top bar. Press Record, reproduce the problem, press Mark Problem." Foreground="#8DA0AA" FontSize="12" TextWrapping="Wrap"/>
+     </StackPanel>
+    </Border>
+    <Border x:Name="HandoffCard" Grid.Row="1" Grid.ColumnSpan="2" Background="#1A2A33" CornerRadius="10" Padding="22,16">
+     <StackPanel Spacing="6">
+      <TextBlock Text="WHERE THIS POINTS" Foreground="#9ED8CA" FontSize="11" FontWeight="SemiBold"/>
+      <TextBlock x:Name="HandoffHeadline" FontSize="18" FontWeight="SemiBold" TextWrapping="Wrap"/>
+      <TextBlock x:Name="HandoffDetail" TextWrapping="Wrap" IsTextSelectionEnabled="True" Foreground="#C9D6DB"/>
+     </StackPanel>
+    </Border>
+   </Grid>
+   <Border Background="#101D25" CornerRadius="10" Padding="22,14">
+    <StackPanel Spacing="6">
+     <TextBlock Text="A typical ticket" FontSize="15" FontWeight="SemiBold"/>
+     <TextBlock TextWrapping="Wrap" Foreground="#A8B8C0" FontSize="13" Text="1. Run the hardware check. If it finds evidence, start there. 2. If it is clean or minor, investigate slowness: Record, reproduce the problem, Mark Problem. 3. Save the report or the recording and attach it to the ticket. Nothing here changes the machine."/>
+    </StackPanel>
+   </Border>
+  </StackPanel>
+ </ScrollViewer>
+</Page>

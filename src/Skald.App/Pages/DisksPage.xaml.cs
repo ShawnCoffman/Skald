@@ -4,6 +4,7 @@ using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Skald.Core.Models;
 using Skald.Collectors;
+using Skald.Triage;
 using Windows.UI;
 
 namespace Skald.App.Pages;

@@ -21,6 +21,7 @@
     <Content Include="Assets\Skald.ico" CopyToOutputDirectory="PreserveNewest" />
     <ProjectReference Include="..\Skald.Core\Skald.Core.csproj" />
     <ProjectReference Include="..\Skald.Collectors\Skald.Collectors.csproj" />
+    <ProjectReference Include="..\Skald.Triage\Skald.Triage.csproj" />
     <ProjectReference Include="..\Skald.Diagnostics\Skald.Diagnostics.csproj" />
     <ProjectReference Include="..\Skald.Recorder\Skald.Recorder.csproj" />
     <PackageReference Include="Microsoft.WindowsAppSDK" Version="1.8.260804001" />

@@ -5,7 +5,7 @@ using System.Text;
 using System.Text.Json;
 using Skald.Core.Models;
 
-namespace Skald.Collectors;
+namespace Skald.Triage;
 
 internal static class HardwareStorageCollector
 {
@@ -103,6 +103,11 @@ internal static class HardwareStorageCollector
                 orphan.Fact("Temperature", HardwareInventoryCollector.Value(row, "Temperature") is { } orphanTemperature ? orphanTemperature + " °C" : "Unavailable", "MSFT_StorageReliabilityCounter", HardwareMatchConfidence.Unmapped);
                 orphan.Fact("Wear used", HardwareInventoryCollector.Value(row, "Wear") is { } orphanWear ? orphanWear + "%" : "Unavailable", "MSFT_StorageReliabilityCounter", HardwareMatchConfidence.Unmapped);
                 orphan.Fact("Uncorrected read / write errors", $"{HardwareInventoryCollector.Value(row, "ReadErrorsUncorrected") ?? "Unavailable"} / {HardwareInventoryCollector.Value(row, "WriteErrorsUncorrected") ?? "Unavailable"}", "MSFT_StorageReliabilityCounter", HardwareMatchConfidence.Unmapped);
+                var orphanWearValue = HardwareInventoryCollector.Number(row, "Wear");
+                var orphanReads = HardwareInventoryCollector.Number(row, "ReadErrorsUncorrected");
+                var orphanWrites = HardwareInventoryCollector.Number(row, "WriteErrorsUncorrected");
+                if (orphanWearValue is >= 100) orphan.Signal("Estimated wear limit reached", $"Provider reports {orphanWearValue}% wear used on a disk it could not identify.", HardwareHealthState.Attention, "MSFT_StorageReliabilityCounter (unmapped)");
+                if (orphanReads is > 0 || orphanWrites is > 0) orphan.Signal("Uncorrected errors reported", $"Historical counts: {orphanReads ?? 0} read, {orphanWrites ?? 0} write, on a disk the provider could not identify.", HardwareHealthState.Attention, "MSFT_StorageReliabilityCounter (unmapped)");
                 devices.Add(orphan);
                 return;
             }

@@ -4,7 +4,7 @@
   <TextBlock Text="What failed, when it started, and the reports around it." Foreground="#98AEB9"/>
   <StackPanel Orientation="Horizontal" Spacing="10">
    <ComboBox x:Name="RangePicker" SelectedIndex="1" SelectionChanged="Filter_Changed" AutomationProperties.Name="Time range"><ComboBoxItem Content="24 hours"/><ComboBoxItem Content="7 days"/><ComboBoxItem Content="30 days"/></ComboBox>
-   <ComboBox x:Name="CategoryPicker" SelectedIndex="0" SelectionChanged="Filter_Changed" AutomationProperties.Name="Event category"><ComboBoxItem Content="Problems"/><ComboBoxItem Content="All categories"/><ComboBoxItem Content="Applications"/><ComboBoxItem Content="Windows reports"/><ComboBoxItem Content="Crashes &amp; restarts"/><ComboBoxItem Content="Hardware"/><ComboBoxItem Content="Drivers &amp; storage"/><ComboBoxItem Content="Changes"/></ComboBox>
+   <ComboBox x:Name="CategoryPicker" SelectedIndex="0" SelectionChanged="Filter_Changed" AutomationProperties.Name="Event category"><ComboBoxItem Content="Problems"/><ComboBoxItem Content="All categories"/><ComboBoxItem Content="Applications"/><ComboBoxItem Content="Windows reports"/><ComboBoxItem Content="Crashes &amp; restarts"/><ComboBoxItem Content="Hardware"/><ComboBoxItem Content="Firmware &amp; diagnostics"/><ComboBoxItem Content="Drivers &amp; storage"/><ComboBoxItem Content="Changes"/></ComboBox>
    <Button x:Name="RefreshButton" Content="Refresh" Click="Refresh_Click"/>
    <Button Content="Clear day filter" Click="ClearDay_Click"/>
   </StackPanel>

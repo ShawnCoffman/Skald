@@ -41,6 +41,12 @@ public sealed class WindowDiagnosticAnalyzer
                 "Windows reported new interface errors or discards in this window; inspect the adapter and network path.",
                 [$"New errors/discards: {count}", $"Interface ID: {adapter.Id}"]));
         }
+        foreach (var zone in ordered.SelectMany(s => s.Sensors).Where(sensor => sensor.Id.EndsWith("/passive-limit", StringComparison.Ordinal))
+                     .Select(sensor => sensor.Device).Distinct(StringComparer.OrdinalIgnoreCase))
+            Add($"Platform thermal limit · {zone}", "Windows reported that this thermal zone was limiting processor performance (passive limit below 100% or a throttle reason set). Compare with the clock and temperature history; the zone is a platform sensor, not necessarily the CPU die.",
+                s => s.Sensors.Any(sensor => sensor.Device.Equals(zone, StringComparison.OrdinalIgnoreCase)
+                    && ((sensor.Id.EndsWith("/passive-limit", StringComparison.Ordinal) && sensor.Value is < 100)
+                        || (sensor.Id.EndsWith("/throttle-reasons", StringComparison.Ordinal) && sensor.Value is > 0))));
         return findings;
 
         void Add(string title, string explanation, Func<SystemMetricsSnapshot, bool> matches, double minimumSeconds = 30)
