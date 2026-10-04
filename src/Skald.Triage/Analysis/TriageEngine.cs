@@ -16,7 +16,8 @@ public static partial class TriageEngine
         "No stress test or active diagnostic is run. This scan reads what Windows has already recorded; for a conclusive hardware test, run the manufacturer's pre-boot diagnostics.",
         "Live thermal and power-limit behavior is not sampled here. Use Investigate slowness while the problem is happening.",
         "Intermittent faults that left no Windows record, events older than the scan window, and cleared or rotated event logs.",
-        "Which kernel driver caused a crash. Stop codes narrow the area; only a dump analysis (WinDbg) names the module."
+        "Which kernel driver caused a crash. Stop codes narrow the area; only a dump analysis (WinDbg) names the module.",
+        "Device checks read Windows' device status, drivers, event records and settings; they do not exercise the hardware (no radio, sound or camera test, and the camera is never opened). Network connectivity, Wi-Fi signal, DNS and VPN are not checked."
     ];
 
     public static TriageReport Evaluate(TriageInputs inputs, string toolVersion)
@@ -26,6 +27,12 @@ public static partial class TriageEngine
         var faults = events.Select(AppFaultParser.Parse).OfType<AppFault>().ToArray();
         var incidents = Incidents(events);
         var dumpCodes = DumpCodes(inputs, cutoff);
+        // Devices the class checks own (hardware plus paired accessories) are not counted again by the generic checks. Only the class
+        // hardware's driver load failures move; everything else about an accessory stays with Drivers.
+        var claimed = ClaimedDevices(inputs, accessories: true);
+        var claimedHardware = ClaimedDevices(inputs, accessories: false);
+        var context = DeviceContextOf(inputs, events, cutoff);
+        var devices = DeviceCatalog.Classes.Select(spec => DeviceClassCheck(inputs, spec, context, faults)).ToArray();
 
         var checks = new List<TriageCheck>
         {
@@ -35,16 +42,26 @@ public static partial class TriageEngine
             Memory(inputs, events, incidents, dumpCodes),
             Graphics(inputs, events, incidents, dumpCodes, faults),
             Firmware(inputs, events),
-            Devices(inputs),
-            Drivers(inputs, events),
-            Battery(inputs),
+            Devices(inputs, claimed),
+            Drivers(inputs, events, claimedHardware),
+            Battery(inputs)
+        };
+        checks.AddRange(devices.Select(outcome => outcome.Check));
+        checks.AddRange(
+        [
+            NetworkSettings(inputs),
+            BluetoothSettings(inputs),
+            AudioSettings(inputs),
+            CameraSettings(inputs),
+            DisplaySettings(inputs),
+            InputSettings(inputs),
             AppFaultCheck(inputs, faults),
             RestartPending(inputs),
             DiskSpace(inputs),
             RecentChanges(inputs),
             DriverChanges(inputs),
             FirmwareAge(inputs)
-        };
+        ]);
 
         var coverageNote = ApplyLogCoverage(inputs, cutoff, checks);
         var notCovered = new List<string>(NotCovered);
@@ -52,8 +69,13 @@ public static partial class TriageEngine
         if (coverageNote is not null) notCovered.Add(coverageNote);
 
         var status = new List<string>(inputs.SourceStatus);
+        var hardwareLeanStop = incidents.Any(item => item.Bugcheck is { } code && Bugchecks.Describe(code).Lean == BugcheckLean.Hardware)
+            || dumpCodes.Any(dump => dump.Header.Bugcheck.Lean == BugcheckLean.Hardware);
+        var notes = new List<UpdateNote> { BiosNote(inputs, checks, hardwareLeanStop) };
+        if (GraphicsNote(checks.FirstOrDefault(check => check.Id == "graphics"), AdapterDrivers(inputs, context)) is { } graphicsNote) notes.Add(graphicsNote);
+        notes.AddRange(devices.Select(outcome => DriverNote(outcome, inputs.WindowDays)).OfType<UpdateNote>());
         return new TriageReport(inputs.Now, inputs.WindowDays, inputs.Elevated, toolVersion, inputs.Machine,
-            Verdict(checks, inputs.WindowDays, coverageNote), checks, notCovered, status);
+            Verdict(checks, inputs.WindowDays, coverageNote), checks, notCovered, status) { UpdateEvidence = notes };
     }
 
     private static readonly string[] SystemLogChecks = ["crashes", "whea", "storage", "memory", "graphics", "firmware", "drivers"];
@@ -105,7 +127,7 @@ public static partial class TriageEngine
             return new(TriageOutcome.MinorFindings, "Minor findings only",
                 $"Windows recorded small signals ({string.Join("; ", minor)}) of the kind that also appear on healthy machines. Check them against the reported symptom before treating hardware as a suspect ({coverage}; last {days} days). " + caveat, minor, coverageNote);
         return new(TriageOutcome.NoHardwareEvidence, "No hardware, driver or firmware evidence found",
-            $"Windows recorded no hardware-leaning crashes, WHEA reports, storage errors, graphics driver resets, device problems or firmware throttling in the last {days} days ({coverage}). " + caveat, [], coverageNote);
+            $"Windows recorded no hardware-leaning crashes, WHEA reports, storage errors, graphics driver resets, device or device-driver problems or firmware throttling in the last {days} days ({coverage}). " + caveat, [], coverageNote);
     }
 
     // ---- Crashes -------------------------------------------------------------------------------------------------------
@@ -382,13 +404,15 @@ public static partial class TriageEngine
 
     // ---- Devices and drivers -------------------------------------------------------------------------------------------
 
-    private static TriageCheck Devices(TriageInputs inputs)
+    private static TriageCheck Devices(TriageInputs inputs, HashSet<string> claimed)
     {
-        const string title = "Device Manager problems";
+        // Devices in a class that has its own check (network adapters, ...) are reported there, not counted twice.
+        var title = claimed.Count > 0 ? "Device Manager problems (other devices)" : "Device Manager problems";
         if (inputs.System is not { DevicesAvailable: true } system)
             return new("devices", title, CheckDomain.HardwareDriverFirmware, CheckStatus.CouldNotCheck, "Device status could not be read.", []);
-        var problems = system.DeviceProblems.Where(item => !item.IsDisabled).ToArray();
-        var disabled = system.DeviceProblems.Count(item => item.IsDisabled);
+        var own = system.DeviceProblems.Where(item => !claimed.Contains(item.DeviceId)).ToArray();
+        var problems = own.Where(item => !item.IsDisabled).ToArray();
+        var disabled = own.Count(item => item.IsDisabled);
         var note = disabled > 0 ? $"{disabled} disabled device(s) not counted; disabling may be intentional." : null;
         return problems.Length == 0
             ? new("devices", title, CheckDomain.HardwareDriverFirmware, CheckStatus.NotFound, "No present device reports a Device Manager problem code.", [], note)
@@ -400,7 +424,7 @@ public static partial class TriageEngine
     // Generic user-mode driver reflector loads fail for any unplugged UMDF device, so they say nothing about a fault.
     private static readonly string[] BenignDriverNames = [@"\Driver\WUDFRd", @"\Driver\WudfPf", @"\Driver\WUDFWpdMtp", @"\Driver\WpdUpFltr"];
 
-    private static TriageCheck Drivers(TriageInputs inputs, IReadOnlyList<ReliabilityEvent> events)
+    private static TriageCheck Drivers(TriageInputs inputs, IReadOnlyList<ReliabilityEvent> events, HashSet<string> claimedHardware)
     {
         const string title = "Drivers (signing and load failures)";
         var details = new List<string>();
@@ -410,12 +434,15 @@ public static partial class TriageEngine
         else
         {
             if (!inputs.Drivers.Complete) limit = $"The driver inventory was incomplete ({inputs.Drivers.Drivers.Count} drivers read), so unsigned drivers may be missed.";
-            var unsigned = inputs.Drivers.Drivers.Where(driver => driver.IsSigned == false).ToArray();
+            var unsigned = inputs.Drivers.Drivers.Where(driver => driver.IsSigned == false && !claimedHardware.Contains(driver.DeviceId)).ToArray();
             unsignedCount = unsigned.Length;
             if (unsigned.Length > 0) details.Add($"{unsigned.Length} installed driver(s) are not signed: " + string.Join("; ", unsigned.Take(MaxLines).Select(driver => $"{driver.Name} ({driver.Provider} {driver.Version})")) + (unsigned.Length > MaxLines ? "; …" : string.Empty));
         }
         var failures = events.Where(item => item.Category == "Drivers & storage"
-            && (item.Provider.Contains("Kernel-PnP", StringComparison.OrdinalIgnoreCase) || item.Provider.Contains("DriverFrameworks", StringComparison.OrdinalIgnoreCase))).ToArray();
+            && (item.Provider.Contains("Kernel-PnP", StringComparison.OrdinalIgnoreCase) || item.Provider.Contains("DriverFrameworks", StringComparison.OrdinalIgnoreCase))
+            // Only a load failure (219) of a class check's own hardware is reported there; every other record stays here.
+            && !(item.EventId == 219 && item.Provider.Contains("Kernel-PnP", StringComparison.OrdinalIgnoreCase)
+                && EventData.Named(item.Raw).TryGetValue("DriverName", out var device) && claimedHardware.Contains(device))).ToArray();
         bool Benign(ReliabilityEvent item) => BenignDriverNames.Any(name => item.Summary.Contains(name, StringComparison.OrdinalIgnoreCase));
         var ignored = failures.Count(Benign);
         var counted = failures.Where(item => !Benign(item)).ToArray();
@@ -566,7 +593,7 @@ public static partial class TriageEngine
         var changes = DriverComparison.Compare(inputs.Baseline.Drivers, inputs.Drivers.Drivers);
         var vendor = changes.Count(change => !DriverComparison.IsInbox(change.Subject));
         details.AddRange(Cap(changes.Select(change => change.Describe()), 15));
-        var compared = $"since {inputs.BaselineLabel ?? Stamp(inputs.Baseline.CreatedAt)}";
+        var compared = $"since {BaselineLabel(inputs)}";
         return details.Count == 0
             ? new("changes", title, CheckDomain.Context, CheckStatus.NotFound, $"No driver, BIOS or OS build change {compared}.", [])
             : new("changes", title, CheckDomain.Context, CheckStatus.Found, $"{changes.Count} driver change(s) ({vendor} non-Microsoft){(details.Count > changes.Count || changes.Count == 0 ? " plus firmware/OS changes" : string.Empty)} {compared}.", details,
@@ -617,6 +644,9 @@ public static partial class TriageEngine
             : item.Summary;
 
     private static string Stamp(DateTimeOffset time) => time.ToLocalTime().ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture);
+
+    // How the baseline is named in every comparison: the file the tech asked for, or the time the previous scan's snapshot was taken.
+    private static string? BaselineLabel(TriageInputs inputs) => inputs.BaselineLabel ?? (inputs.Baseline is null ? null : Stamp(inputs.Baseline.CreatedAt));
 
     [GeneratedRegex(@"bugcheck\s+was:\s*(0x[0-9a-fA-F]+)", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
     private static partial Regex BugcheckText();

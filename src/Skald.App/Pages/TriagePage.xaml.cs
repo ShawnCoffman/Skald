@@ -75,7 +75,12 @@ public sealed partial class TriagePage : Page, ITelemetryPage
         VerdictDetail.Text = report.Verdict.Detail;
 
         ChecksPanel.Children.Clear();
-        foreach (var domain in new[] { CheckDomain.HardwareDriverFirmware, CheckDomain.Software, CheckDomain.Context })
+        if (report.UpdateEvidence.Count > 0)
+        {
+            ChecksPanel.Children.Add(new TextBlock { Text = TriageLabels.UpdateSection, FontSize = 16, FontWeight = FontWeights.SemiBold, Margin = new Thickness(0, 10, 0, 0) });
+            foreach (var note in report.UpdateEvidence) ChecksPanel.Children.Add(UpdateCard(note));
+        }
+        foreach (var domain in TriageLabels.DomainOrder)
         {
             var checks = report.In(domain).ToArray();
             if (checks.Length == 0) continue;
@@ -120,6 +125,21 @@ public sealed partial class TriagePage : Page, ITelemetryPage
             Header = header, Content = body, HorizontalAlignment = HorizontalAlignment.Stretch, HorizontalContentAlignment = HorizontalAlignment.Stretch,
             IsExpanded = check.Status == CheckStatus.Found && !check.Minor
         };
+    }
+
+    private static Border UpdateCard(UpdateNote note)
+    {
+        var accent = note.Lean switch { UpdateLean.PointsHere => Hex("#FFB4AB"), UpdateLean.CouldNotAssess => Hex("#9FB3BC"), _ => Hex("#9FE0B8") };
+        var grid = new Grid { ColumnSpacing = 12 };
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(150) });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        grid.Children.Add(new TextBlock { Text = TriageLabels.Update(note.Lean), Foreground = new SolidColorBrush(accent), FontWeight = FontWeights.SemiBold, FontSize = 12, TextWrapping = TextWrapping.Wrap });
+        var text = new StackPanel { Spacing = 2 };
+        text.Children.Add(new TextBlock { Text = note.Subject, FontWeight = FontWeights.SemiBold });
+        text.Children.Add(new TextBlock { Text = note.Text, Foreground = new SolidColorBrush(Hex("#A8B8C0")), FontSize = 12, TextWrapping = TextWrapping.Wrap, IsTextSelectionEnabled = true });
+        Grid.SetColumn(text, 1);
+        grid.Children.Add(text);
+        return new Border { Child = grid, Padding = new Thickness(16, 10, 16, 10), CornerRadius = new CornerRadius(6), Background = new SolidColorBrush(Hex("#111F29")) };
     }
 
     private static TriageResult? Current => TriageSession.Last;

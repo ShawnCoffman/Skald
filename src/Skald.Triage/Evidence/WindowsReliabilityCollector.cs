@@ -29,39 +29,13 @@ public static class WindowsReliabilityCollector
         var truncated = new Dictionary<string, DateTimeOffset>(StringComparer.OrdinalIgnoreCase);
         foreach (var log in new[] { "System", "Application" })
         {
-            var read = 0;
-            var skipped = 0;
-            DateTimeOffset? oldest = null;
             try
             {
-                var query = new EventLogQuery(log, PathType.LogName, $"*[System[TimeCreated[{time}] and (Level=1 or Level=2 or Level=3 or Provider[@Name='Microsoft-Windows-WindowsUpdateClient'] or Provider[@Name='MsiInstaller'] or Provider[@Name='Windows Error Reporting'] or Provider[@Name='Microsoft-Windows-WHEA-Logger'] or Provider[@Name='Microsoft-Windows-MemoryDiagnostics-Results'])]]") { ReverseDirection = true };
-                using var reader = new EventLogReader(query);
-                while (read < ScanCap)
-                {
-                    using var record = reader.ReadEvent(TimeSpan.FromSeconds(5));
-                    if (record is null) break;
-                    read++;
-                    if (record.TimeCreated is { } seen) oldest = new DateTimeOffset(seen);
-                    var provider = record.ProviderName ?? "Unknown";
-                    var category = ReliabilityAnalysis.Category(provider, record.Id);
-                    if (category is null || record.TimeCreated is not { } created) continue;
-                    // One unreadable record is skipped and counted; it must not abort the whole log.
-                    try
-                    {
-                        var raw = record.ToXml();
-                        var component = Component(raw, provider);
-                        string message;
-                        try { message = record.FormatDescription() ?? "No formatted message available. See raw event XML."; }
-                        catch (EventLogException) { message = "Message resources unavailable. See raw event XML."; }
-                        events.Add(new(new DateTimeOffset(created), log, record.RecordId ?? 0, provider, record.Id, category,
-                            record.Level switch { 1 => "Critical", 2 => "Error", 3 => "Warning", _ => "Information" }, component,
-                            FirstLine(message, provider, record.Id), message, raw));
-                    }
-                    catch (Exception ex) when (ex is EventLogException or System.Xml.XmlException or InvalidOperationException) { skipped++; }
-                }
-                if (skipped > 0) status.Add($"{log}: {skipped} relevant record(s) could not be read and were skipped");
-                if (read == ScanCap && oldest is { } first && first > cutoff) truncated[log] = first;
-                status.Add($"{log}: {read} records scanned{(read == ScanCap ? $" · limit reached; records before {Stamp(oldest)} were not read" : string.Empty)}");
+                var scan = EventLogScan.Read(log, $"*[System[TimeCreated[{time}] and (Level=1 or Level=2 or Level=3 or Provider[@Name='Microsoft-Windows-WindowsUpdateClient'] or Provider[@Name='MsiInstaller'] or Provider[@Name='Windows Error Reporting'] or Provider[@Name='Microsoft-Windows-WHEA-Logger'] or Provider[@Name='Microsoft-Windows-MemoryDiagnostics-Results'])]]",
+                    ScanCap, ReliabilityAnalysis.Category, null, events);
+                if (scan.Skipped > 0) status.Add($"{log}: {scan.Skipped} relevant record(s) could not be read and were skipped");
+                if (scan.CapReached && scan.OldestRead is { } first && first > cutoff) truncated[log] = first;
+                status.Add($"{log}: {scan.Read} records scanned{(scan.CapReached ? $" · limit reached; records before {Stamp(scan.OldestRead)} were not read" : string.Empty)}");
                 nativeLogs.Add(log);
             }
             catch (Exception ex) when (ex is EventLogException or UnauthorizedAccessException or System.Security.SecurityException)
@@ -121,7 +95,7 @@ public static class WindowsReliabilityCollector
         }
         return fallback;
     }
-    private static string FirstLine(string message, string provider, int id)
+    internal static string FirstLine(string message, string provider, int id)
     {
         var line = message.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries).FirstOrDefault()?.Trim();
         return string.IsNullOrEmpty(line) ? $"{provider} · Event {id}" : line.Length > 160 ? line[..160] + "…" : line;

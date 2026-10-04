@@ -17,8 +17,6 @@ public static class TriageReportWriter
         Converters = { new JsonStringEnumConverter() }
     };
 
-    private static readonly CheckDomain[] Order = [CheckDomain.HardwareDriverFirmware, CheckDomain.Software, CheckDomain.Context];
-
     // Escapes every non-ASCII character (\uXXXX), for consoles and shells that do not decode UTF-8.
     private static readonly JsonSerializerOptions AsciiJsonOptions = new(JsonOptions) { Encoder = System.Text.Encodings.Web.JavaScriptEncoder.Default };
 
@@ -34,7 +32,17 @@ public static class TriageReportWriter
         text.AppendLine();
         text.AppendLine(FormattableString.Invariant($"VERDICT: {report.Verdict.Headline.ToUpperInvariant()}"));
         text.AppendLine(Wrap(report.Verdict.Detail, 0));
-        foreach (var domain in Order)
+        if (report.UpdateEvidence.Count > 0)
+        {
+            text.AppendLine();
+            text.AppendLine(TriageLabels.UpdateSection.ToUpperInvariant());
+            foreach (var note in report.UpdateEvidence)
+            {
+                text.AppendLine(FormattableString.Invariant($"  [{TriageLabels.Update(note.Lean)}] {note.Subject}"));
+                text.AppendLine(Wrap(note.Text, 6));
+            }
+        }
+        foreach (var domain in TriageLabels.DomainOrder)
         {
             var checks = report.In(domain).ToArray();
             if (checks.Length == 0) continue;
@@ -87,7 +95,16 @@ public static class TriageReportWriter
         html.AppendLine(FormattableString.Invariant($"<h1>Skald hardware check</h1><div class=\"meta\">Scanned {E(report.GeneratedAt.ToLocalTime().ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture))} · last {report.WindowDays} days · {(report.Elevated ? "administrator" : "standard user")} · Skald {E(report.ToolVersion)}</div>"));
         var verdictClass = report.Verdict.Outcome switch { TriageOutcome.HardwareEvidenceFound => "found", TriageOutcome.MinorFindings => "minor", TriageOutcome.Incomplete => "incomplete", _ => "" };
         html.AppendLine(FormattableString.Invariant($"<div class=\"verdict {verdictClass}\"><h2>{E(report.Verdict.Headline)}</h2><div>{E(report.Verdict.Detail)}</div></div>"));
-        foreach (var domain in Order)
+        if (report.UpdateEvidence.Count > 0)
+        {
+            html.AppendLine(FormattableString.Invariant($"<h2>{E(TriageLabels.UpdateSection)}</h2>"));
+            foreach (var note in report.UpdateEvidence)
+            {
+                var css = note.Lean switch { UpdateLean.PointsHere => "found", UpdateLean.CouldNotAssess => "unable", _ => "clear" };
+                html.AppendLine(FormattableString.Invariant($"<div class=\"check\"><h3><span class=\"badge {css}\">{E(TriageLabels.Update(note.Lean))}</span>{E(note.Subject)}</h3><div>{E(note.Text)}</div></div>"));
+            }
+        }
+        foreach (var domain in TriageLabels.DomainOrder)
         {
             var checks = report.In(domain).ToArray();
             if (checks.Length == 0) continue;

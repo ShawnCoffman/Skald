@@ -17,7 +17,7 @@ public sealed record TriageResult(TriageReport Report, DriverInventory? Drivers,
 
 public static class TriageInfo
 {
-    public const string Version = "0.2.0";
+    public const string Version = "0.3.0";
 }
 
 public static class TriageScanner
@@ -35,6 +35,8 @@ public static class TriageScanner
         var driversTask = Guard(DriverInventoryCollector.CollectAsync(), "Driver inventory", status);
         var dumpsTask = Guard(CrashDumpCollector.CollectAsync(), "Crash dumps", status);
         var updatesTask = Guard(WindowsUpdateCollector.CollectAsync(since: now.AddDays(-options.WindowDays)), "Windows Update", status);
+        var devicesTask = Guard(DeviceEvidenceCollector.CollectAsync(since: now.AddDays(-options.WindowDays)), "Device evidence", status);
+        var settingsTask = Guard(DeviceSettingsCollector.CollectAsync(), "Device settings", status);
 
         // Collectors cannot be interrupted, but the caller can stop waiting for them.
         var reliability = await reliabilityTask.WaitAsync(cancellationToken).ConfigureAwait(false);
@@ -46,6 +48,9 @@ public static class TriageScanner
         var drivers = await driversTask.WaitAsync(cancellationToken).ConfigureAwait(false);
         var dumps = await dumpsTask.WaitAsync(cancellationToken).ConfigureAwait(false);
         var updates = await updatesTask.WaitAsync(cancellationToken).ConfigureAwait(false);
+        progress?.Report("Reading devices, device drivers and device settings…");
+        var devices = await devicesTask.WaitAsync(cancellationToken).ConfigureAwait(false);
+        var settings = await settingsTask.WaitAsync(cancellationToken).ConfigureAwait(false);
         cancellationToken.ThrowIfCancellationRequested();
 
         progress?.Report("Reading crash dump headers…");
@@ -54,7 +59,8 @@ public static class TriageScanner
         foreach (var (prefix, lines) in new (string, IEnumerable<string>?)[]
                  {
                      ("Events", reliability?.SourceStatus), ("Hardware", hardware?.SourceStatus.Where(line => !line.StartsWith("Events · ", StringComparison.Ordinal))), ("Drivers", drivers?.SourceStatus),
-                     ("Dumps", dumps?.SourceStatus), ("Updates", updates?.SourceStatus), ("System", system?.Limitations)
+                     ("Dumps", dumps?.SourceStatus), ("Updates", updates?.SourceStatus), ("System", system?.Limitations),
+                     ("Devices", devices?.SourceStatus), ("Settings", settings?.SourceStatus)
                  })
             if (lines is not null) status.AddRange(lines.Select(line => $"{prefix} · {line}"));
 
@@ -74,7 +80,7 @@ public static class TriageScanner
 
         var inputs = new TriageInputs(now, options.WindowDays, IsElevated())
         {
-            Reliability = reliability, Hardware = hardware, System = system, Dumps = dumps, Updates = updates, Drivers = drivers,
+            Reliability = reliability, Hardware = hardware, System = system, Dumps = dumps, Updates = updates, Drivers = drivers, Devices = devices, Settings = settings,
             Baseline = baseline, BaselineLabel = label, BaselineRequested = options.BaselinePath is null ? null : Path.GetFileName(options.BaselinePath), DumpHeaders = headers, BiosVersion = biosVersion, BiosReleaseDate = biosDate,
             Machine = machine, SourceStatus = status
         };
