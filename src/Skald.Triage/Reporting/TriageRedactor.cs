@@ -22,7 +22,8 @@ public static partial class TriageRedactor
                 Summary = Scrub(check.Summary), Details = check.Details.Select(Scrub).ToArray(), Limit = check.Limit is null ? null : Scrub(check.Limit)
             }).ToArray(),
             NotCovered = report.NotCovered.Select(Scrub).ToArray(),
-            SourceStatus = report.SourceStatus.Select(Scrub).ToArray()
+            SourceStatus = report.SourceStatus.Select(Scrub).ToArray(),
+            UpdateEvidence = report.UpdateEvidence.Select(note => note with { Text = Scrub(note.Text) }).ToArray()
         };
     }
 

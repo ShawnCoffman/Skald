@@ -28,27 +28,42 @@ public static class Handoff
         var checkedText = $"Hardware check run {when}." + (report.Verdict.Coverage is { } coverage ? " " + coverage : string.Empty);
         var lookedAt = report.Verdict.Coverage is null ? $"in the last {report.WindowDays.ToString(CultureInfo.InvariantCulture)} days" : "in the part of the logs that was read";
         var software = report.Checks.FirstOrDefault(check => check.Id == "app.faults" && check.Status == CheckStatus.Found);
+        // A Windows setting that blocks a device (airplane mode, a radio switched off, a disabled adapter) is not a fault, but it is often the whole answer.
+        var blocking = report.Checks.Where(check => check.Domain == CheckDomain.DeviceSettings && check.Status == CheckStatus.Found && !check.Minor).ToArray();
+        var blocked = string.Join(" and ", blocking.Select(check => check.Blocks ?? "a device").Distinct());
+        var setting = blocking.Length == 0 ? string.Empty : $" A Windows setting is also blocking {blocked}: {string.Join(" ", blocking.Select(check => check.Summary))}";
+        var crashes = software is null ? string.Empty : $" Application crashes are on record: {software.Summary}";
 
         switch (report.Verdict.Outcome)
         {
             case TriageOutcome.HardwareEvidenceFound:
                 return new("Hardware, driver or firmware evidence exists",
                     $"{checkedText} Resolve or rule out {string.Join("; ", report.Verdict.Leads)} before attributing this to an application."
-                    + (now is null ? string.Empty : $" The machine is also flagged for {now}, which may be a symptom of the same fault."));
+                    + (now is null ? string.Empty : $" The machine is also flagged for {now}, which may be a symptom of the same fault.") + setting);
             case TriageOutcome.Incomplete:
-                return new("Hardware check incomplete", $"{checkedText} {report.Verdict.Detail}");
+                return new("Hardware check incomplete", $"{checkedText} {report.Verdict.Detail}{setting}");
             default:
                 if (report.Verdict.Outcome == TriageOutcome.MinorFindings)
                     checkedText += $" Minor findings noted ({string.Join("; ", report.Verdict.Leads)}); none is strong evidence on its own.";
                 var platform = current.Where(IsPlatformFinding).ToArray();
+                // The setting is the lead when hardware looks clean, but a live platform constraint, the busiest process and
+                // recorded application crashes are still said; a tech chasing a Teams crash must not be sent to Filter Keys alone.
+                var settingLead = blocking.Length == 0 ? string.Empty
+                    : $" {string.Join(" ", blocking.Select(check => check.Summary))} This is a Windows setting, not a fault, and it does not change the hardware verdict.";
                 if (platform.Length > 0)
                     return new("The current constraint points at the platform, not an application",
                         $"{checkedText} Windows recorded no significant hardware evidence, but right now the machine shows {string.Join(", ", platform)}. "
-                        + "These describe a device, driver, thermal limit or network path, so do not attribute them to the busiest process. Capture it with Record and Mark Problem, then check the disk, driver or cooling named.");
+                        + "These describe a device, driver, thermal limit or network path, so do not attribute them to the busiest process. Capture it with Record and Mark Problem, then check the disk, driver or cooling named."
+                        + settingLead + crashes);
+                if (blocking.Length > 0)
+                    return new(report.Verdict.Outcome == TriageOutcome.NoHardwareEvidence ? $"Hardware and drivers look clean; a Windows setting is blocking {blocked}"
+                            : $"No significant hardware evidence; a Windows setting is blocking {blocked}",
+                        $"{checkedText}{settingLead}"
+                        + (now is null ? string.Empty : $" The machine is also flagged for {now}." + (topProcess is null ? string.Empty : $" The largest contributor in the live view is {topProcess}; treat that as a lead, not proof."))
+                        + crashes);
                 if (now is null)
                     return new("No hardware evidence, and nothing is constrained right now",
-                        $"{checkedText} If the problem is intermittent, press Record, reproduce it, then Mark Problem so the evidence is captured."
-                        + (software is null ? string.Empty : $" Application crashes are on record: {software.Summary}"));
+                        $"{checkedText} If the problem is intermittent, press Record, reproduce it, then Mark Problem so the evidence is captured." + crashes);
                 return new("The current constraint looks software-side",
                     $"{checkedText} Windows recorded no significant hardware, driver or firmware evidence {lookedAt}, and the machine is flagged for {now}."
                     + (topProcess is null ? string.Empty : $" The largest contributor in the live view is {topProcess}.")

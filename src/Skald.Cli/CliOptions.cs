@@ -38,6 +38,7 @@ public sealed record CliOptions
 
         Exit codes: 0 nothing significant (clear or minor findings only), 1 hardware evidence found, 2 check incomplete, 3 error, 64 bad arguments.
         Run as administrator for the most complete result (kernel dump headers, some storage counters).
+        Sound, privacy, display and accessibility settings are read only when skald runs as the signed-in user.
         Console output is plain ASCII; saved files are UTF-8. Ctrl+C stops the scan; press it twice to quit at once.
         """;
 

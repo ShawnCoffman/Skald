@@ -1,7 +1,8 @@
 namespace Skald.Triage;
 
+// Signer is null in snapshots saved before it was recorded.
 public sealed record DriverRecord(string DeviceId, string Name, string Class, string Version, DateTimeOffset? Date,
-    string Provider, string Inf, bool? IsSigned);
+    string Provider, string Inf, bool? IsSigned, string? Signer = null);
 
 public sealed record DriverInventory(DateTimeOffset CollectedAt, IReadOnlyList<DriverRecord> Drivers, IReadOnlyList<string> SourceStatus)
 {

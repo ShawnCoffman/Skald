@@ -15,7 +15,7 @@ public static class DriverInventoryCollector
         try
         {
             using var searcher = new ManagementObjectSearcher(HardwareInventoryCollector.CimNamespace,
-                "SELECT DeviceID,DeviceName,DeviceClass,DriverVersion,DriverDate,DriverProviderName,InfName,IsSigned FROM Win32_PnPSignedDriver",
+                "SELECT DeviceID,DeviceName,DeviceClass,DriverVersion,DriverDate,DriverProviderName,InfName,IsSigned,Signer FROM Win32_PnPSignedDriver",
                 new System.Management.EnumerationOptions { Timeout = TimeSpan.FromSeconds(90) });
             using var rows = searcher.Get();
             foreach (ManagementBaseObject row in rows)
@@ -28,7 +28,7 @@ public static class DriverInventoryCollector
                     drivers.Add(new(id, HardwareInventoryCollector.Value(row, "DeviceName") ?? id, HardwareInventoryCollector.Value(row, "DeviceClass") ?? "Other",
                         version, DriverComparison.ParseCimDate(HardwareInventoryCollector.Value(row, "DriverDate")),
                         HardwareInventoryCollector.Value(row, "DriverProviderName") ?? "Unknown", HardwareInventoryCollector.Value(row, "InfName") ?? "",
-                        row["IsSigned"] is bool signed ? signed : null));
+                        row["IsSigned"] is bool signed ? signed : null, HardwareInventoryCollector.Value(row, "Signer")));
                 }
             }
             complete = drivers.Count > 0;
